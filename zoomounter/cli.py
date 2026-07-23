@@ -53,7 +53,7 @@ def build_parser() -> argparse.ArgumentParser:
     custom_mount.add_argument("--bolt-count", type=int)
     custom_mount.add_argument("--bolt-circle-dia-mm", type=float)
     custom_mount.add_argument("--bolt-hole-dia-mm", type=float)
-    custom_mount.add_argument("--center-hole-dia-mm", type=float, default=0)
+    custom_mount.add_argument("--center-hole-dia-mm", type=float, default=None)
 
     custom_material = p.add_argument_group("--material custom options")
     custom_material.add_argument("--density-kg-m3", type=float)
@@ -75,7 +75,8 @@ def fill_in_interactively(args: argparse.Namespace) -> None:
         args.bolt_count = args.bolt_count or int(_prompt_float("Bolt count", default=4))
         args.bolt_circle_dia_mm = args.bolt_circle_dia_mm or _prompt_float("Bolt circle diameter (mm)")
         args.bolt_hole_dia_mm = args.bolt_hole_dia_mm or _prompt_float("Bolt hole diameter (mm)")
-        args.center_hole_dia_mm = args.center_hole_dia_mm or _prompt_float("Center hole diameter (mm, 0 for none)", default=0)
+        if args.center_hole_dia_mm is None:
+            args.center_hole_dia_mm = _prompt_float("Center hole diameter (mm, 0 for none)", default=0)
 
     if not args.material:
         print(f"\nMaterials: {', '.join(MATERIALS.keys())}, or 'custom'")
