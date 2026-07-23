@@ -1,8 +1,15 @@
 .env
-output/
+output*/
 __pycache__/
 *.pyc
 .venv/
 venv/
 .claudex/
 AGENTS.md
+
+# Zoo Design Studio auto-scaffolds these into any folder it opens as a
+# project -- not part of what ZooMounter itself generates, so keep them
+# out of version control wherever they show up.
+project.toml
+thumbnail.png
+main.kcl
