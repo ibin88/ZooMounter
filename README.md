@@ -38,7 +38,7 @@ Interactive — just run it with no flags and answer the prompts:
 python -m zoomounter.cli
 ```
 
-Output goes to `./output/` by default: `mount.kcl`, `export/output.step`, and `inspection_report.md`.
+Output goes to `./output/` by default: `mount.kcl`, `export/output.step`, and `inspection_report.md`. The terminal shows a spec summary, live status while the Agent API generates (this step usually takes 1-3 minutes), and a color-coded pass/fail results table at the end.
 
 ### Built-in mount types
 | Key | Description | Hole pattern |

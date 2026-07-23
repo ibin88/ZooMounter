@@ -60,11 +60,17 @@ def _api_token() -> str:
     return token
 
 
-def generate_kcl(prompt: str) -> str:
+def generate_kcl(prompt: str, on_status=None) -> str:
     """Call the Agent API's text-to-CAD endpoint and poll until it returns
-    KCL source for the requested geometry."""
+    KCL source for the requested geometry.
+
+    `on_status`, if given, is called as `on_status(elapsed_seconds, status)`
+    after each poll -- this generation step routinely takes 1-3 minutes, so
+    giving real feedback tied to the actual job status (rather than staying
+    silent) matters for the CLI not feeling hung."""
     headers = {"Authorization": f"Bearer {_api_token()}", "Content-Type": "application/json"}
 
+    start = time.time()
     resp = requests.post(
         f"{API_BASE}/ai/text-to-cad/step",
         headers=headers,
@@ -75,7 +81,7 @@ def generate_kcl(prompt: str) -> str:
     job = resp.json()
     job_id = job["id"]
 
-    deadline = time.time() + POLL_TIMEOUT_S
+    deadline = start + POLL_TIMEOUT_S
     while time.time() < deadline:
         time.sleep(POLL_INTERVAL_S)
         poll = requests.get(
@@ -86,6 +92,8 @@ def generate_kcl(prompt: str) -> str:
         poll.raise_for_status()
         data = poll.json()
         status = data.get("status")
+        if on_status:
+            on_status(time.time() - start, status)
         if status == "completed":
             code = data.get("code")
             if not code:
