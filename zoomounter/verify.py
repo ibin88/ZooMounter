@@ -1,7 +1,18 @@
 """Verify step: run the generated STEP file back through Zoo's File Format
-API and compare the *actual* measured mass against what the requested
-geometry should weigh. This is the check that catches the Agent API quietly
-drifting from the spec it was given."""
+API and compare *actual* measured properties against what the requested
+geometry should produce. This is the check that catches the Agent API
+quietly drifting from the spec it was given.
+
+Two independent checks, not one:
+- Volume (pure geometry -- doesn't depend on material data at all)
+- Mass (geometry x density -- also exercises that the material was applied
+  correctly)
+
+Both have to pass for the part to pass. A geometry bug that happens not to
+move the mass much (e.g. a hole in the wrong place but the same size) would
+still likely show up as a volume difference, and vice versa for a density
+mixup -- so checking both catches more than either alone.
+"""
 
 import os
 from dataclasses import dataclass
@@ -25,11 +36,21 @@ class VerificationError(RuntimeError):
 
 
 @dataclass
-class VerificationResult:
-    expected_mass_g: float
-    actual_mass_g: float
+class CheckResult:
+    expected: float
+    actual: float
     percent_diff: float
     passed: bool
+
+
+@dataclass
+class VerificationResult:
+    volume: CheckResult
+    mass: CheckResult
+
+    @property
+    def passed(self) -> bool:
+        return self.volume.passed and self.mass.passed
 
 
 def _api_token() -> str:
@@ -39,6 +60,30 @@ def _api_token() -> str:
             "ZOO_API_TOKEN is not set. Copy .env.example to .env and add your token."
         )
     return token
+
+
+def _check(expected: float, actual: float) -> CheckResult:
+    percent_diff = abs(actual - expected) / expected * 100
+    return CheckResult(expected, actual, percent_diff, (percent_diff / 100) <= TOLERANCE_FRACTION)
+
+
+def measure_actual_volume_mm3(step_path: Path) -> float:
+    headers = {
+        "Authorization": f"Bearer {_api_token()}",
+        "Content-Type": "application/octet-stream",
+    }
+    resp = requests.post(
+        f"{API_BASE}/file/volume",
+        headers=headers,
+        params={"src_format": "step", "output_unit": "mm3"},
+        data=step_path.read_bytes(),
+        timeout=60,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    if data.get("status") != "completed" or "volume" not in data:
+        raise VerificationError(f"File Format API did not return a volume: {data}")
+    return data["volume"]
 
 
 def measure_actual_mass_g(step_path: Path, material: Material) -> float:
@@ -70,14 +115,10 @@ def verify(step_path: Path, mount: MountSpec, material: Material, thickness_mm: 
     expected_volume_mm3 = mount.estimate_volume_mm3(thickness_mm)
     expected_mass_g = expected_volume_mm3 * material.density_kg_m3 * 1e-6
 
+    actual_volume_mm3 = measure_actual_volume_mm3(step_path)
     actual_mass_g = measure_actual_mass_g(step_path, material)
 
-    percent_diff = abs(actual_mass_g - expected_mass_g) / expected_mass_g * 100
-    passed = (percent_diff / 100) <= TOLERANCE_FRACTION
-
     return VerificationResult(
-        expected_mass_g=expected_mass_g,
-        actual_mass_g=actual_mass_g,
-        percent_diff=percent_diff,
-        passed=passed,
+        volume=_check(expected_volume_mm3, actual_volume_mm3),
+        mass=_check(expected_mass_g, actual_mass_g),
     )
