@@ -8,13 +8,13 @@ Built for [Zoo's API Makeathon](https://zoo.dev), using the **Agent API** (to ge
 
 Text-to-CAD tools are great at turning a sentence into geometry, but they don't know engineering standards, and there's no check that what comes back actually matches what you asked for. ZooMounter closes that gap for one common prototyping task — sizing and generating a mount plate:
 
-1. **You give it an engineering spec** — mount type (e.g. NEMA 17 motor), material, expected load, safety factor.
-2. **A domain-rules layer calculates the real numbers** — the mount's standard bolt pattern, and the plate thickness required to survive the load (cantilever bending stress + deflection checks) in the material you chose.
-3. **Those exact numbers go into the Agent API prompt** — not "design a motor mount," but "a 42.3mm plate, 3mm holes on a 31mm bolt circle, 3.8mm thick."
+1. **You give it an engineering spec** — mount type (e.g. NEMA 17 motor, Raspberry Pi, VESA panel), material, expected load, safety factor.
+2. **A domain-rules layer calculates the real numbers** — the mount's exact hole pattern (from a real hardware standard, not guessed), and the plate thickness required to survive the load (cantilever bending stress + deflection checks) in the material you chose.
+3. **Those exact numbers go into the Agent API prompt** — every hole given as an exact (x, y) coordinate, not "add some mounting holes." This is also what lets the same pipeline handle circular bolt-circle patterns (motors, bearings) and rectangular hardware patterns (Raspberry Pi, VESA) with no special-casing.
 4. **The generated KCL is executed into a real STEP file** via Zoo's CLI.
-5. **The STEP file is measured independently** through the File Format API's mass endpoint, and compared against what the requested geometry should weigh. Mismatch beyond tolerance = fail, not a silent bad part.
+5. **The STEP file is measured independently** through the File Format API — **two separate checks**, volume (pure geometry) and mass (geometry × density), each compared against what the requested spec should produce. Both have to pass. A hole in the wrong place doesn't always move the mass much, but it usually moves the volume — checking both catches more than either alone.
 
-You get a STEP file and a report showing the calculation, the generation, and the pass/fail check — so "AI-generated CAD" comes with a receipt.
+You get a STEP file and a report showing the calculation, the generation, and both pass/fail checks — so "AI-generated CAD" comes with a receipt.
 
 ## Install
 
@@ -41,12 +41,14 @@ python -m zoomounter.cli
 Output goes to `./output/` by default: `mount.kcl`, `export/output.step`, and `inspection_report.md`.
 
 ### Built-in mount types
-| Key | Description |
-|---|---|
-| `nema17` | NEMA 17 stepper motor mount |
-| `nema23` | NEMA 23 stepper motor mount |
-| `bearing_608` | 608 (skate) bearing mount |
-| `custom` | supply your own bolt pattern via `--plate-width-mm`, `--bolt-count`, `--bolt-circle-dia-mm`, `--bolt-hole-dia-mm`, `--center-hole-dia-mm` |
+| Key | Description | Hole pattern |
+|---|---|---|
+| `nema17` | NEMA 17 stepper motor mount | circular bolt circle |
+| `nema23` | NEMA 23 stepper motor mount | circular bolt circle |
+| `bearing_608` | 608 (skate) bearing mount | circular bolt circle |
+| `raspberry_pi` | Raspberry Pi mounting plate (Model B+/2/3/4) | rectangular, real Pi hole spacing |
+| `vesa_75` | VESA 75 mount (screen/panel bracket) | rectangular, VESA standard |
+| `custom` | supply your own circular bolt pattern via `--plate-width-mm`, `--bolt-count`, `--bolt-circle-dia-mm`, `--bolt-hole-dia-mm`, `--center-hole-dia-mm` | circular bolt circle |
 
 ### Built-in materials
 | Key | Process |
@@ -63,7 +65,8 @@ Zoo's own web app already does prompt-to-CAD out of the box — that's not somet
 
 - The bending calc is a hand-calc-grade cantilever approximation (rectangular section, static load, no stress concentration at holes) — good for a sanity check, not a substitute for real FEA on a load-bearing part.
 - The `bearing_608` mount models the center feature as a plain through-bore sized to the bearing OD. A real pillow-block mount needs a shouldered pocket or retaining feature to actually capture the bearing — this is a v1 simplification, flagged here on purpose.
-- Verification currently checks mass only (a good proxy for "did the geometry come out right"), with a 15% tolerance to allow for modeling differences that don't affect fit or function.
+- Verification checks volume and mass, both derived from the same rectangular-minus-holes area model -- it doesn't independently confirm hole *positions* are correct, only that the total material removed matches. A 15% tolerance is applied to allow for modeling differences that don't affect fit or function.
+- `--mount custom` only supports circular bolt patterns for now; built-in rectangular patterns (Raspberry Pi, VESA) aren't yet exposable as arbitrary custom coordinates from the CLI.
 
 ## License
 

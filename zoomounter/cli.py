@@ -119,10 +119,14 @@ def write_report(
 - **Required thickness: {thickness.required_thickness_mm:.2f} mm**
 
 ## Verification (generated part, measured via Zoo File Format API)
-- Expected mass (hand calc from requested geometry): {result.expected_mass_g:.2f} g
-- Actual mass (measured on generated STEP): {result.actual_mass_g:.2f} g
-- Difference: {result.percent_diff:.1f}%
-- Tolerance: {int(verify.TOLERANCE_FRACTION * 100)}%
+Two independent checks -- both must pass:
+
+| Check | Expected (hand calc) | Actual (measured on generated STEP) | Difference | Pass? |
+|---|---|---|---|---|
+| Volume | {result.volume.expected:.1f} mm3 | {result.volume.actual:.1f} mm3 | {result.volume.percent_diff:.1f}% | {"PASS" if result.volume.passed else "FAIL"} |
+| Mass | {result.mass.expected:.2f} g | {result.mass.actual:.2f} g | {result.mass.percent_diff:.1f}% | {"PASS" if result.mass.passed else "FAIL"} |
+
+Tolerance: {int(verify.TOLERANCE_FRACTION * 100)}% on each check.
 
 ## Result: {status}
 """
@@ -184,7 +188,11 @@ def main(argv: list[str] | None = None) -> int:
     write_report(report_path, mount.name, material.name, args.load_n, args.safety_factor, thickness, result)
 
     status = "PASS" if result.passed else "FAIL"
-    print(f"\nVerification: {status} ({result.percent_diff:.1f}% mass difference, {int(verify.TOLERANCE_FRACTION*100)}% tolerance)")
+    print(
+        f"\nVerification: {status} "
+        f"(volume {result.volume.percent_diff:.1f}% diff, mass {result.mass.percent_diff:.1f}% diff, "
+        f"{int(verify.TOLERANCE_FRACTION*100)}% tolerance)"
+    )
     print(f"Report: {report_path}")
     return 0
 

@@ -1,8 +1,14 @@
 """Mount-type geometry table for ZooMounter.
 
-Each entry describes a standard mounting interface: plate/flange footprint,
-bolt circle, hole sizes, and any center clearance bore. `--mount custom` lets
-a user supply their own bolt pattern for anything not in the table.
+Each entry describes a standard mounting interface as an explicit list of
+hole positions (offsets from plate center) rather than assuming a circular
+bolt pattern -- that's what lets the same model cover both classic circular
+bolt-circle mounts (motors, bearings) and rectangular hole patterns from
+real hardware standards (Raspberry Pi, VESA). `circular_bolt_pattern()` is
+a helper for building the circular case concisely.
+
+`--mount custom` lets a user supply their own circular bolt pattern for
+anything not in the table.
 
 Note on the bearing mount: v1 models the center feature as a plain
 through-bore sized to the bearing OD (a prototyping-grade simplification --
@@ -15,23 +21,33 @@ import math
 from dataclasses import dataclass
 
 
+def circular_bolt_pattern(count: int, circle_dia_mm: float) -> tuple[tuple[float, float], ...]:
+    """N holes evenly spaced on a circle of the given diameter, centered on
+    the origin."""
+    radius = circle_dia_mm / 2
+    return tuple(
+        (round(radius * math.cos(2 * math.pi * i / count), 4), round(radius * math.sin(2 * math.pi * i / count), 4))
+        for i in range(count)
+    )
+
+
 @dataclass(frozen=True)
 class MountSpec:
     name: str
-    kind: str  # "motor", "bearing", "flange"
-    plate_width_mm: float  # square plate footprint; used as beam width in mechanics calc
-    bolt_count: int
-    bolt_circle_dia_mm: float
-    bolt_hole_dia_mm: float
-    center_hole_dia_mm: float  # shaft/bore/press-fit clearance; 0 if none
+    kind: str  # "motor", "bearing", "board", "flange"
+    plate_width_mm: float  # X extent; also used as beam width in mechanics calc
+    plate_height_mm: float  # Y extent
+    bolt_hole_dia_mm: float  # uniform diameter for all mounting holes
+    hole_positions: tuple[tuple[float, float], ...]  # (x, y) offsets from plate center
+    center_hole_dia_mm: float = 0  # shaft/bore/press-fit clearance; 0 if none
 
     def estimate_volume_mm3(self, thickness_mm: float) -> float:
-        """Solid plate volume minus all through-holes -- used to sanity-check
-        the Agent API's generated geometry against a hand calc before we ever
+        """Solid plate volume minus all holes -- used to sanity-check the
+        Agent API's generated geometry against a hand calc before we ever
         call the File Format API."""
-        plate_area = self.plate_width_mm**2
+        plate_area = self.plate_width_mm * self.plate_height_mm
         center_area = math.pi * (self.center_hole_dia_mm / 2) ** 2
-        bolt_hole_area = self.bolt_count * math.pi * (self.bolt_hole_dia_mm / 2) ** 2
+        bolt_hole_area = len(self.hole_positions) * math.pi * (self.bolt_hole_dia_mm / 2) ** 2
         net_area = plate_area - center_area - bolt_hole_area
         return net_area * thickness_mm
 
@@ -41,28 +57,46 @@ MOUNTS: dict[str, MountSpec] = {
         name="NEMA 17 stepper motor mount",
         kind="motor",
         plate_width_mm=42.3,
-        bolt_count=4,
-        bolt_circle_dia_mm=31.0,
+        plate_height_mm=42.3,
         bolt_hole_dia_mm=3.0,
+        hole_positions=circular_bolt_pattern(4, 31.0),
         center_hole_dia_mm=22.0,
     ),
     "nema23": MountSpec(
         name="NEMA 23 stepper motor mount",
         kind="motor",
         plate_width_mm=56.4,
-        bolt_count=4,
-        bolt_circle_dia_mm=47.14,
+        plate_height_mm=56.4,
         bolt_hole_dia_mm=5.0,
+        hole_positions=circular_bolt_pattern(4, 47.14),
         center_hole_dia_mm=38.1,
     ),
     "bearing_608": MountSpec(
         name="608 bearing (skate bearing) pillow mount",
         kind="bearing",
         plate_width_mm=40.0,
-        bolt_count=4,
-        bolt_circle_dia_mm=34.0,
+        plate_height_mm=40.0,
         bolt_hole_dia_mm=3.0,
-        center_hole_dia_mm=22.0,  # bearing OD, sits in a pocket rather than through-hole
+        hole_positions=circular_bolt_pattern(4, 34.0),
+        center_hole_dia_mm=22.0,  # bearing OD -- see module docstring
+    ),
+    "raspberry_pi": MountSpec(
+        name="Raspberry Pi mounting plate (Model B+/2/3/4 hole pattern)",
+        kind="board",
+        plate_width_mm=65.0,
+        plate_height_mm=56.0,
+        bolt_hole_dia_mm=2.7,
+        hole_positions=((-29.0, -24.5), (29.0, -24.5), (-29.0, 24.5), (29.0, 24.5)),  # 58mm x 49mm spacing
+        center_hole_dia_mm=0,
+    ),
+    "vesa_75": MountSpec(
+        name="VESA 75 mount (screen/panel bracket)",
+        kind="flange",
+        plate_width_mm=90.0,
+        plate_height_mm=90.0,
+        bolt_hole_dia_mm=4.3,  # M4 clearance
+        hole_positions=((-37.5, -37.5), (37.5, -37.5), (-37.5, 37.5), (37.5, 37.5)),
+        center_hole_dia_mm=0,
     ),
 }
 
@@ -75,7 +109,8 @@ def get_mount(
     bolt_hole_dia_mm: float | None = None,
     center_hole_dia_mm: float = 0,
 ) -> MountSpec:
-    """Look up a built-in mount, or build a custom flange from explicit values."""
+    """Look up a built-in mount, or build a custom circular-bolt-pattern
+    flange from explicit values."""
     if name == "custom":
         missing = [
             n
@@ -93,9 +128,9 @@ def get_mount(
             name="Custom flange mount",
             kind="flange",
             plate_width_mm=plate_width_mm,
-            bolt_count=bolt_count,
-            bolt_circle_dia_mm=bolt_circle_dia_mm,
+            plate_height_mm=plate_width_mm,
             bolt_hole_dia_mm=bolt_hole_dia_mm,
+            hole_positions=circular_bolt_pattern(bolt_count, bolt_circle_dia_mm),
             center_hole_dia_mm=center_hole_dia_mm,
         )
 

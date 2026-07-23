@@ -29,21 +29,25 @@ class GenerationError(RuntimeError):
 
 def build_prompt(mount: MountSpec, material: Material, thickness_mm: float) -> str:
     """Turn a fully-solved engineering spec into an unambiguous, numbers-only
-    prompt for the Agent API. Every dimension is stated explicitly so the
-    model has nothing to guess -- that's what makes the verify step
-    meaningful."""
+    prompt for the Agent API. Every dimension is stated explicitly -- holes
+    are given as exact (x, y) offsets from the plate center rather than a
+    vague "bolt circle" description, so the model has nothing to guess and
+    both circular and rectangular hole patterns come out the same way.
+    That's what makes the verify step meaningful."""
+    hole_list = "; ".join(f"({x}mm, {y}mm)" for x, y in mount.hole_positions)
+
     center_clause = ""
     if mount.center_hole_dia_mm > 0:
         center_clause = (
-            f" a {mount.center_hole_dia_mm}mm diameter through-hole centered on the plate,"
+            f" It also has a {mount.center_hole_dia_mm}mm diameter through-hole centered on the plate."
         )
 
     return (
-        f"A flat square mounting plate, {mount.plate_width_mm}mm x {mount.plate_width_mm}mm, "
-        f"{round(thickness_mm, 2)}mm thick, with {mount.bolt_count} "
-        f"{mount.bolt_hole_dia_mm}mm diameter through-holes evenly spaced on a "
-        f"{mount.bolt_circle_dia_mm}mm diameter bolt circle centered on the plate, "
-        f"and{center_clause} all holes through the full thickness of the plate."
+        f"A flat rectangular mounting plate, {mount.plate_width_mm}mm wide (x-axis) x "
+        f"{mount.plate_height_mm}mm tall (y-axis) x {round(thickness_mm, 2)}mm thick, centered at the "
+        f"origin. It has {len(mount.hole_positions)} through-holes, each "
+        f"{mount.bolt_hole_dia_mm}mm in diameter, centered at these (x, y) coordinates relative to the "
+        f"plate center: {hole_list}.{center_clause} All holes go through the full thickness of the plate."
     )
 
 
