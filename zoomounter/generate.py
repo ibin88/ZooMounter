@@ -11,6 +11,7 @@ reimplementing that protocol, we shell out to Zoo's own official CLI
 import os
 import subprocess
 import time
+import uuid
 from pathlib import Path
 
 import requests
@@ -105,28 +106,82 @@ def generate_kcl(prompt: str, on_status=None) -> str:
     raise GenerationError(f"Timed out after {POLL_TIMEOUT_S}s waiting for generation job {job_id}.")
 
 
-def export_step(kcl_code: str, output_dir: Path) -> Path:
-    """Write KCL source to disk and execute it via the Zoo CLI to produce a
-    STEP file. Requires the `zoo` CLI to be installed and authenticated
-    (same ZOO_API_TOKEN env var works for both)."""
+def _write_project_toml(output_dir: Path) -> None:
+    """Write a minimal project.toml so output_dir is a ready-made Zoo Design
+    Studio project -- openable directly, without the app having to
+    auto-scaffold one the first time it's pointed at the folder."""
+    project_toml = output_dir / "project.toml"
+    if project_toml.exists():
+        return
+    project_id = uuid.uuid4()
+    project_toml.write_text(
+        f'[settings.meta]\nid = "{project_id}"\n\n[settings.app]\n\n[settings.modeling]\n',
+        encoding="utf-8",
+    )
+
+
+def _zoo_cli() -> str:
+    return os.environ.get("ZOO_CLI_PATH", "zoo")
+
+
+def write_kcl_project(kcl_code: str, output_dir: Path) -> Path:
+    """Write KCL source + a project.toml to output_dir. This alone is
+    enough for the folder to open directly as a Zoo Design Studio project --
+    no STEP export or verification required. Returns the path to main.kcl.
+
+    The KCL is written as main.kcl (the filename Zoo Design Studio expects
+    for a project's entry point -- confirmed by observing what the app
+    itself names files when it scaffolds a folder)."""
     output_dir.mkdir(parents=True, exist_ok=True)
-    kcl_path = output_dir / "mount.kcl"
+    kcl_path = output_dir / "main.kcl"
     kcl_path.write_text(kcl_code, encoding="utf-8")
+    _write_project_toml(output_dir)
+    return kcl_path
 
-    zoo_cli = os.environ.get("ZOO_CLI_PATH", "zoo")
-    export_dir = output_dir / "export"
-    export_dir.mkdir(parents=True, exist_ok=True)
 
+def snapshot_preview(kcl_path: Path, image_path: Path, angle: str = "iso") -> Path:
+    """Render a quick preview image of a KCL file via `zoo kcl snapshot`.
+    Writes to whatever `image_path` you give it -- pass a temp-directory
+    path if you don't want a preview image left behind in the project
+    folder. Returns image_path on success."""
+    image_path.parent.mkdir(parents=True, exist_ok=True)
     try:
         result = subprocess.run(
-            [zoo_cli, "kcl", "export", "--output-format", "step", str(kcl_path), str(export_dir)],
+            [_zoo_cli(), "kcl", "snapshot", "--angle", angle, str(kcl_path), str(image_path)],
             capture_output=True,
             text=True,
             timeout=120,
         )
     except FileNotFoundError as e:
         raise GenerationError(
-            f"Zoo CLI not found at '{zoo_cli}'. Install it and ensure it's on PATH, "
+            f"Zoo CLI not found at '{_zoo_cli()}'. Install it and ensure it's on PATH, "
+            f"or set ZOO_CLI_PATH to its location."
+        ) from e
+
+    if result.returncode != 0:
+        raise GenerationError(f"zoo kcl snapshot failed:\n{result.stderr or result.stdout}")
+    if not image_path.exists():
+        raise GenerationError(f"Expected preview image not found at {image_path}")
+    return image_path
+
+
+def export_step(kcl_path: Path, output_dir: Path) -> Path:
+    """Execute the KCL at kcl_path via the Zoo CLI to produce a STEP file
+    under output_dir/export/. Requires the `zoo` CLI to be installed and
+    authenticated (same ZOO_API_TOKEN env var works for both)."""
+    export_dir = output_dir / "export"
+    export_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        result = subprocess.run(
+            [_zoo_cli(), "kcl", "export", "--output-format", "step", str(kcl_path), str(export_dir)],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+    except FileNotFoundError as e:
+        raise GenerationError(
+            f"Zoo CLI not found at '{_zoo_cli()}'. Install it and ensure it's on PATH, "
             f"or set ZOO_CLI_PATH to its location."
         ) from e
 

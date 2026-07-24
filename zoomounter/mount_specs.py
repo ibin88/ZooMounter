@@ -40,6 +40,10 @@ class MountSpec:
     bolt_hole_dia_mm: float  # uniform diameter for all mounting holes
     hole_positions: tuple[tuple[float, float], ...]  # (x, y) offsets from plate center
     center_hole_dia_mm: float = 0  # shaft/bore/press-fit clearance; 0 if none
+    typical_mass_kg: float = 0  # approximate mass of the component itself (motor, etc); 0 if negligible/not applicable
+    typical_body_length_mm: float = 0  # approximate distance from mount face to where an external side load
+    # (belt, pulley, gear) would typically apply -- used as the default lever arm for radial-load mounts
+    # instead of an arbitrary half-plate-width guess. 0 means "use half plate width" (no better default known).
 
     def estimate_volume_mm3(self, thickness_mm: float) -> float:
         """Solid plate volume minus all holes -- used to sanity-check the
@@ -61,6 +65,8 @@ MOUNTS: dict[str, MountSpec] = {
         bolt_hole_dia_mm=3.0,
         hole_positions=circular_bolt_pattern(4, 31.0),
         center_hole_dia_mm=22.0,
+        typical_mass_kg=0.28,  # representative mid-length NEMA17 (~40mm body); varies ~0.2-0.4kg by length
+        typical_body_length_mm=40.0,
     ),
     "nema23": MountSpec(
         name="NEMA 23 stepper motor mount",
@@ -70,6 +76,8 @@ MOUNTS: dict[str, MountSpec] = {
         bolt_hole_dia_mm=5.0,
         hole_positions=circular_bolt_pattern(4, 47.14),
         center_hole_dia_mm=38.1,
+        typical_mass_kg=0.7,  # representative mid-length NEMA23 (~56mm body); varies ~0.5-1.0kg by length
+        typical_body_length_mm=56.0,
     ),
     "bearing_608": MountSpec(
         name="608 bearing (skate bearing) pillow mount",
