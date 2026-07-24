@@ -93,7 +93,7 @@ def fill_in_interactively(args: argparse.Namespace) -> None:
             args.center_hole_dia_mm = FloatPrompt.ask("Center hole diameter (mm, 0 for none)", default=0)
 
     if not args.material:
-        console.print(f"\nMaterials: {', '.join(MATERIALS.keys())}, or 'custom'[/dim]")
+        console.print(f"[dim]Materials: {', '.join(MATERIALS.keys())}, or 'custom'[/dim]")
         args.material = Prompt.ask("Material", default="aluminum_6061")
     if args.material == "custom":
         args.process = args.process or Prompt.ask("Process", choices=["3d_print", "machined"], default="machined")
