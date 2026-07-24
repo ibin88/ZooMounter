@@ -1,20 +1,71 @@
 # ZooMounter
 
-Generate a mechanical mount from an engineering spec — not a vague prompt — and get it back verified, not just generated.
+Generate a mounting plate from an engineering spec, then check the generated
+geometry actually matches that spec — including *where every hole ended up*,
+not just how much material came back.
 
-Built for [Zoo's API Makeathon](https://zoo.dev), using the **Agent API** (to generate) and the **File Format API** (to verify).
+Built for [Zoo's API Makeathon](https://zoo.dev) on the **Agent API** (to
+generate) and the **File Format API** (to measure).
 
-## The idea
+> **New to this?** A mounting plate is the flat bracket that bolts a motor (or
+> a Raspberry Pi, or a monitor arm) to a machine. Get its hole pattern wrong by
+> two millimetres and the screws don't line up — the part is scrap. That
+> specific failure is what this tool is built to catch.
 
-Text-to-CAD tools are great at turning a sentence into geometry, but they don't know engineering standards, and there's no check that what comes back actually matches what you asked for. ZooMounter closes that gap for one common prototyping task — sizing and generating a mount plate:
+---
 
-1. **You give it an engineering spec** — mount type (e.g. NEMA 17 motor, Raspberry Pi, VESA panel), material, expected load and its **type**, safety factor.
-2. **A domain-rules layer calculates the real numbers** — the mount's exact hole pattern (from a real hardware standard, not guessed), and the plate thickness required to survive the load in the material you chose. Two load types are modeled, because a plate reacts them completely differently: **radial** (a side load, e.g. a belt/pulley pulling sideways on a motor shaft — modeled as a cantilever beam, checked against both bending stress and tip deflection) and **axial** (a thrust load straight along the bolt axis, e.g. a leadscrew pushing back into the motor — modeled as bearing stress at the bolt holes, since a flat plate barely bends under an in-plane load at all). For motor mounts under a radial load, the motor's own weight is also folded in as a baseline load (worst case: shaft mounted horizontal), and the default lever arm comes from the motor's typical body length rather than an arbitrary guess.
-3. **Those exact numbers go into the Agent API prompt** — every hole given as an exact (x, y) coordinate, not "add some mounting holes." This is also what lets the same pipeline handle circular bolt-circle patterns (motors, bearings) and rectangular hardware patterns (Raspberry Pi, VESA) with no special-casing.
-4. **The generated KCL is executed into a real STEP file** via Zoo's CLI.
-5. **The STEP file is measured independently** through the File Format API — **two separate checks**, volume (pure geometry) and mass (geometry × density), each compared against what the requested spec should produce. Both have to pass. A hole in the wrong place doesn't always move the mass much, but it usually moves the volume — checking both catches more than either alone.
+## The problem this solves
 
-You get a STEP file and a report showing the calculation, the generation, and both pass/fail checks — so "AI-generated CAD" comes with a receipt.
+Text-to-CAD will happily turn a sentence into geometry. Two things it won't do:
+
+1. **Know your engineering constraints.** "A motor mount" doesn't encode the
+   NEMA 17 bolt circle, or how thick the plate has to be so it doesn't visibly
+   deflect under a 150N belt tension in PETG.
+2. **Tell you whether it got it right.** You get geometry back. Whether it
+   matches what you asked for is your problem.
+
+ZooMounter closes both, for one narrow, real task.
+
+## How it works
+
+1. **You give an engineering spec** — mount type, material, load *and load
+   type*, safety factor.
+2. **A domain-rules layer computes the actual numbers.** The hole pattern comes
+   from the real hardware standard. The thickness comes from a beam calc
+   (see [Sizing](#sizing-what-the-numbers-mean)).
+3. **Those exact numbers go into the Agent API prompt** — every hole as an
+   explicit `(x, y)` coordinate, never "add some mounting holes." This is also
+   why circular bolt circles (motors, bearings) and rectangular patterns
+   (Raspberry Pi, VESA) need no special-casing: they're all just coordinates.
+4. **The KCL is executed into a real STEP file** via Zoo's CLI.
+5. **The result is checked against the spec** — three checks, below.
+
+You get a Zoo Design Studio project, a STEP file, and a report showing the
+calculation, the generation, and every check.
+
+## Verification: what's actually checked
+
+| Check | How | Catches |
+|---|---|---|
+| **Hole positions** | STEP file parsed locally — every hole centre and diameter compared to the coordinates we asked for | A hole in the wrong place, a missing hole, the wrong bolt pattern |
+| **Bounding box** | Parsed locally from the same file | A part generated at the wrong scale |
+| **Volume** | Measured by Zoo's File Format API vs. a plate-minus-holes hand calc | Material that shouldn't be there — an unrequested pocket, boss or fillet |
+
+Tolerances: **0.5mm absolute** on hole positions (a bolt hole is either where
+the bolt is or it isn't), **15%** on bulk dimensions and volume (to allow for
+modelling choices that don't affect fit).
+
+Mass is reported because it's useful to know, but it is **not** counted as a
+check — it's the measured volume times the density you supplied, so it carries
+no information the volume check doesn't.
+
+> **An earlier version of this tool got that wrong**, and counted volume and
+> mass as "two independent checks." They're the same check. More importantly,
+> both are blind to a hole being in the wrong place. The measurement that
+> disproves it — two parts differing by 0.004% in volume, one of them scrap —
+> is written up in
+> [examples/WHY-POSITION-CHECKING-MATTERS.md](examples/WHY-POSITION-CHECKING-MATTERS.md).
+> That's the reason the hole-position check exists.
 
 ## Install
 
@@ -22,59 +73,117 @@ You get a STEP file and a report showing the calculation, the generation, and bo
 pip install -r requirements.txt
 ```
 
-You also need:
-- A [Zoo API token](https://zoo.dev/signup) (free tier covers plenty of test runs) — copy `.env.example` to `.env` and paste it in.
-- The [Zoo CLI](https://github.com/KittyCAD/cli/releases) on your PATH (or set `ZOO_CLI_PATH` in `.env` to its location). It's used to execute the generated KCL into a STEP file.
+Also required:
+- A [Zoo API token](https://zoo.dev/signup) — copy `.env.example` to `.env` and paste it in.
+- The [Zoo CLI](https://github.com/KittyCAD/cli/releases) on your PATH (or set
+  `ZOO_CLI_PATH` in `.env`). It executes the generated KCL into a STEP file —
+  see [NOTES-FOR-ZOO.md](NOTES-FOR-ZOO.md) §2 for why this is a separate binary.
 
 ## Usage
 
-Scripted:
 ```bash
-python -m zoomounter.cli --mount nema17 --material aluminum_6061 --load-n 5 --safety-factor 2
-```
+# scripted
+python -m zoomounter.cli --mount nema17 --material aluminum_6061 --load-n 150 --safety-factor 2
 
-Interactive — just run it with no flags and answer the prompts:
-```bash
+# interactive — run with no flags and answer the prompts
 python -m zoomounter.cli
-```
 
-GUI — a desktop window instead of the terminal:
-```bash
+# desktop GUI
 python -m zoomounter.gui
 ```
-Same backend, same options, plus: a live local calculation preview as you fill in the form (instant, no API cost), an "Export STEP + verify" checkbox (uncheck for a fast preview-only run -- just the generated project and a snapshot image, no STEP export or File Format API verification), and a rendered preview image of the part shown right after generation. The preview image is rendered via `zoo kcl snapshot` to a temp file and deleted immediately after loading -- it's never written into your project folder.
 
-Every run (CLI or GUI) writes to its own uniquely-named subfolder under `./output/` (mount + material + timestamp), so nothing gets overwritten. Each subfolder is `main.kcl` + `project.toml` (a ready-made Zoo Design Studio project -- point the app at the `output/` folder, not the repo root, to see a clean list of every part you've generated), `export/output.step` (universal CAD format, only with STEP export on), and `inspection_report.md`. The terminal/GUI shows a spec summary, live status while the Agent API generates (this step usually takes 1-3 minutes), and a color-coded pass/fail results table at the end.
+The GUI adds a live thickness calculation as you type (instant, no API cost), a
+rendered preview of the generated part, and an **"Export STEP + verify"**
+toggle — uncheck it for a fast preview-only run that skips the STEP export and
+verification.
 
-### Built-in mount types
+Every run writes to its own timestamped folder under `./output/`, containing
+`main.kcl` + `project.toml` (**open the `output/` folder in Zoo Design Studio**
+— not the repo root — to see each generated part as its own project),
+`export/output.step`, and `inspection_report.md`.
+
+### Mount types
+
 | Key | Description | Hole pattern |
 |---|---|---|
-| `nema17` | NEMA 17 stepper motor mount | circular bolt circle |
-| `nema23` | NEMA 23 stepper motor mount | circular bolt circle |
-| `bearing_608` | 608 (skate) bearing mount | circular bolt circle |
-| `raspberry_pi` | Raspberry Pi mounting plate (Model B+/2/3/4) | rectangular, real Pi hole spacing |
-| `vesa_75` | VESA 75 mount (screen/panel bracket) | rectangular, VESA standard |
-| `custom` | supply your own circular bolt pattern via `--plate-width-mm`, `--bolt-count`, `--bolt-circle-dia-mm`, `--bolt-hole-dia-mm`, `--center-hole-dia-mm` | circular bolt circle |
+| `nema17` | NEMA 17 stepper motor | circular, 31mm bolt circle |
+| `nema23` | NEMA 23 stepper motor | circular, 47.14mm bolt circle |
+| `bearing_608` | 608 (skate) bearing | circular |
+| `raspberry_pi` | Raspberry Pi B+/2/3/4 | rectangular, 58 × 49mm |
+| `vesa_75` | VESA 75 display bracket | rectangular, 75 × 75mm |
+| `custom` | your own circular pattern via `--plate-width-mm`, `--bolt-count`, `--bolt-circle-dia-mm`, `--bolt-hole-dia-mm`, `--center-hole-dia-mm` | circular |
 
-### Built-in materials
+### Materials
+
 | Key | Process |
 |---|---|
 | `pla`, `petg`, `abs` | 3D printed |
 | `aluminum_6061`, `mild_steel` | machined |
-| `custom` | supply your own via `--density-kg-m3`, `--youngs-modulus-gpa`, `--yield-mpa`, `--process` |
+| `custom` | your own via `--density-kg-m3`, `--youngs-modulus-gpa`, `--yield-mpa`, `--process` |
 
-## Why this, not just Zookeeper
+## Sizing: what the numbers mean
 
-Zoo's own web app already does prompt-to-CAD out of the box — that's not something to rebuild. What it doesn't do is *check its own work* against an engineering requirement. ZooMounter is deliberately narrow (one part type: mounting plates) so that the domain-rules and verification layers are real, not hand-waved — and it's structured so adding a new mount family or material is a table entry, not a rewrite, for anyone who wants to extend it.
+Load type matters, because a plate reacts the two cases completely differently.
 
-## Known limitations (prototyping-grade, not certified)
+**`--load-type radial`** (default) — a side load: a belt, pulley or gear pulling
+perpendicular to the shaft. The plate acts as a cantilever, so this is genuinely
+thickness-governed. Checked against bending stress (yield ÷ safety factor) and
+tip deflection (limited to arm/300, a common bracket stiffness rule of thumb),
+with the larger winning. For motor mounts the motor's own weight is added
+(worst case: shaft horizontal, so gravity pulls sideways too) and the lever arm
+defaults to the motor's body length.
 
-- Both load-type calcs are hand-calc-grade approximations (rectangular section, static load, no stress concentration at holes) — good for a sanity check, not a substitute for real FEA on a load-bearing part.
-- Only one load type is applied per run -- a real mount often sees some combination of radial and axial load simultaneously (e.g. a leadscrew motor under both belt side-load and thrust); this doesn't combine them, you'd need to run each and take the worse case yourself.
-- Motor self-weight and typical body length (used for the radial load default lever arm) are representative approximations for a "typical" NEMA17/23, not your specific motor's datasheet values -- override with `--overhang-mm` if you know the real dimension.
-- The `bearing_608` mount models the center feature as a plain through-bore sized to the bearing OD. A real pillow-block mount needs a shouldered pocket or retaining feature to actually capture the bearing — this is a v1 simplification, flagged here on purpose.
-- Verification checks volume and mass, both derived from the same rectangular-minus-holes area model -- it doesn't independently confirm hole *positions* are correct, only that the total material removed matches. A 15% tolerance is applied to allow for modeling differences that don't affect fit or function.
-- `--mount custom` only supports circular bolt patterns for now; built-in rectangular patterns (Raspberry Pi, VESA) aren't yet exposable as arbitrary custom coordinates from the CLI.
+**`--load-type axial`** — thrust along the bolt axis, e.g. a leadscrew pushing
+back into a motor. The plate's own failure mode here is the screw head punching
+through it, which needs very little thickness. **For axial loads the plate is
+usually not the limiting element at all** — the fasteners, their thread
+engagement in the motor's tapped holes, and the motor's own axial bearing
+rating typically govern first. ZooMounter runs a screw-tension estimate and
+warns when the fasteners are the constraint, and explicitly names what it
+*doesn't* check, so a thin result reads as "look elsewhere" rather than as an
+all-clear.
+
+Every report names which limit actually governed — including when it's just the
+minimum manufacturable wall thickness, which means the part isn't structurally
+limited at that load at all.
+
+## Tests
+
+```bash
+python -m pytest tests/ -v
+```
+
+16 tests, fully offline — no API calls, no credits. They cover the STEP parser,
+the hole matcher, the sizing calcs, and the verifier catching a deliberately
+corrupted part.
+
+## Honest limitations
+
+- **The calcs are hand-calc grade** — rectangular section, static load, no
+  stress concentration at holes. A sanity check for prototyping, not a
+  substitute for FEA on anything load-bearing.
+- **One load type per run.** A real mount often sees radial and axial load
+  simultaneously; this doesn't combine them. Run both and take the worse case.
+- **Motor mass and body length are representative values** for a typical
+  NEMA 17/23, not your specific motor's datasheet. Override the lever arm with
+  `--overhang-mm` if you know the real dimension.
+- **`bearing_608` models the bore as a plain through-hole** sized to the bearing
+  OD. A real pillow block needs a shouldered pocket or retaining feature to
+  actually capture the bearing.
+- **Verification can't see features it wasn't told about.** It checks the holes
+  and envelope it asked for; a chamfer or fillet the model added on its own
+  shows up (if at all) only as a small volume difference.
+- **`--mount custom` is circular-pattern only.** The built-in rectangular
+  patterns aren't yet expressible as arbitrary custom coordinates from the CLI.
+- **The axial screw-tension estimate assumes class-8.8 steel fasteners** at the
+  largest standard size that fits the clearance hole. If you're using something
+  else, treat it as indicative.
+
+## For the Zoo team
+
+[NOTES-FOR-ZOO.md](NOTES-FOR-ZOO.md) — API findings from building this: an
+undocumented response shape, two credit pools where the docs describe one, the
+websocket-only KCL execution path, and some things that worked notably well.
 
 ## License
 

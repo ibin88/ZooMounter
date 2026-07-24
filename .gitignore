@@ -13,3 +13,4 @@ AGENTS.md
 project.toml
 thumbnail.png
 main.kcl
+.pytest_cache/

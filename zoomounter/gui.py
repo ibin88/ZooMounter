@@ -282,20 +282,18 @@ class App(ctk.CTk):
         except (ValueError, TypeError) as e:
             self.preview_label.configure(text=f"Input error: {e}", text_color="#e05252")
             return
-        weight_note = (
-            f"  (includes {thickness.self_weight_n:.2f} N component self-weight -> effective load {thickness.effective_load_n:.2f} N)"
-            if thickness.self_weight_n > 0
-            else ""
-        )
+        lines = [
+            f"Required thickness: {thickness.required_thickness_mm:.2f} mm "
+            f"(governed by {thickness.governing_limit})",
+            f"[{thickness.load_type}] stress: {thickness.thickness_from_stress_mm:.2f} mm, "
+            f"deflection: {thickness.thickness_from_deflection_mm:.2f} mm, "
+            f"process min: {thickness.min_wall_mm:.2f} mm",
+        ]
+        lines.extend(f"- {n}" for n in thickness.notes)
+        has_warning = any(n.startswith("WARNING") for n in thickness.notes)
         self.preview_label.configure(
-            text=(
-                f"[{thickness.load_type}] Lever arm: {thickness.lever_arm_mm:.2f} mm{weight_note}\n"
-                f"Required thickness: {thickness.required_thickness_mm:.2f} mm\n"
-                f"(stress/bearing-limited: {thickness.thickness_from_stress_mm:.2f} mm, "
-                f"deflection-limited: {thickness.thickness_from_deflection_mm:.2f} mm, "
-                f"process min: {thickness.min_wall_mm:.2f} mm)"
-            ),
-            text_color=("black", "white"),
+            text="\n".join(lines),
+            text_color="#d98c00" if has_warning else ("black", "white"),
         )
 
     # ---- generation ---------------------------------------------------
@@ -391,12 +389,16 @@ class App(ctk.CTk):
         self.open_folder_button.configure(state="normal")
         self.status_label.configure(text=f"Done. Report: {report_path}", text_color=("black", "white"))
 
-        def fmt(name, unit, check):
+        lines = []
+        for check in result.checks:
             mark = "PASS" if check.passed else "FAIL"
-            return f"{name}: expected {check.expected:.2f} {unit}, actual {check.actual:.2f} {unit}, diff {check.percent_diff:.1f}% -- {mark}\n"
-
-        text = fmt("Volume", "mm3", result.volume) + fmt("Mass", "g", result.mass)
-        self._set_results_text(text)
+            lines.append(f"[{mark}] {check.name}\n    {check.detail}\n")
+        if result.mass_g is not None:
+            lines.append(
+                f"Mass: {result.mass_g:.2f} g (reported property, not an independent "
+                f"check -- it is volume x your supplied density)\n"
+            )
+        self._set_results_text("\n".join(lines))
         if result.passed:
             self.overall_label.configure(text="PASS", text_color="#2fa572")
         else:

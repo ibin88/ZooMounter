@@ -21,6 +21,7 @@ from rich.table import Table
 from . import generate, mechanics, verify
 from .materials import MATERIALS, get_material
 from .mount_specs import MOUNTS, get_mount
+from .verify import POSITION_TOLERANCE_MM
 
 console = Console()
 
@@ -123,25 +124,32 @@ def print_spec_summary(mount, material, args, thickness: mechanics.ThicknessResu
             f"{thickness.self_weight_n:.2f} N ({mount.typical_mass_kg} kg) -> effective load {thickness.effective_load_n:.2f} N",
         )
     table.add_row("[bold]Safety factor[/bold]", str(args.safety_factor))
-    table.add_row("[bold]Calculated thickness[/bold]", f"{thickness.required_thickness_mm:.2f} mm")
+    table.add_row(
+        "[bold]Calculated thickness[/bold]",
+        f"{thickness.required_thickness_mm:.2f} mm  [dim](governed by {thickness.governing_limit})[/dim]",
+    )
     console.print(table)
+    for note in thickness.notes:
+        style = "yellow" if note.startswith("WARNING") else "dim"
+        console.print(f"  [{style}]- {note}[/{style}]")
 
 
 def print_results_table(result: verify.VerificationResult) -> None:
     table = Table(title="Verification")
     table.add_column("Check")
-    table.add_column("Expected", justify="right")
-    table.add_column("Actual", justify="right")
-    table.add_column("Diff", justify="right")
     table.add_column("Result")
+    table.add_column("Detail")
 
-    def row(name: str, unit: str, check: verify.CheckResult) -> None:
+    for check in result.checks:
         mark = "[green]PASS[/green]" if check.passed else "[red]FAIL[/red]"
-        table.add_row(name, f"{check.expected:.2f} {unit}", f"{check.actual:.2f} {unit}", f"{check.percent_diff:.1f}%", mark)
+        table.add_row(check.name, mark, check.detail)
 
-    row("Volume", "mm3", result.volume)
-    row("Mass", "g", result.mass)
     console.print(table)
+    if result.mass_g is not None:
+        console.print(
+            f"[dim]Mass of the generated part: {result.mass_g:.2f} g "
+            f"(reported property, not an independent check -- it is volume x the density you supplied)[/dim]"
+        )
 
 
 def write_report(
@@ -157,13 +165,46 @@ def write_report(
     load_type_note = (
         "Radial (side) load -- modeled as a cantilever beam; bending stress and tip deflection both checked."
         if thickness.load_type == "radial"
-        else "Axial (thrust) load -- modeled as bearing stress at the bolt holes, not bending; a flat plate resists an in-plane/through-thickness load far better than a cantilevered side load."
+        else "Axial (thrust) load -- plate sized against screw-head pull-through (punching shear). For thrust, the plate is usually not the limiting element; see notes."
     )
     self_weight_line = (
         f"- Component self-weight added to external load: {thickness.self_weight_n:.2f} N -> effective load {thickness.effective_load_n:.2f} N\n"
         if thickness.self_weight_n > 0
         else ""
     )
+    notes_block = (
+        "\n### Engineering notes\n" + "\n".join(f"- {n}" for n in thickness.notes) + "\n"
+        if thickness.notes
+        else ""
+    )
+
+    check_rows = "\n".join(
+        f"| {c.name} | {'PASS' if c.passed else 'FAIL'} | {c.detail} |" for c in result.checks
+    )
+
+    hole_rows = ""
+    if result.hole_details:
+        hole_rows = "\n### Hole-by-hole\n\n| Expected (x, y) mm | Dia mm | Found at (x, y) mm | Position error mm |\n|---|---|---|---|\n"
+        for h in result.hole_details:
+            if h.found:
+                hole_rows += (
+                    f"| ({h.expected_x_mm:.2f}, {h.expected_y_mm:.2f}) | {h.expected_dia_mm:.2f} | "
+                    f"({h.actual_x_mm:.2f}, {h.actual_y_mm:.2f}) | {h.position_error_mm:.3f} |\n"
+                )
+            else:
+                hole_rows += (
+                    f"| ({h.expected_x_mm:.2f}, {h.expected_y_mm:.2f}) | {h.expected_dia_mm:.2f} | "
+                    f"**NOT FOUND** | - |\n"
+                )
+
+    mass_line = (
+        f"\nMass of the generated part: **{result.mass_g:.2f} g**. This is reported as a "
+        f"property, not counted as a check -- it is the measured volume multiplied by the "
+        f"density you supplied, so it carries no information the volume check doesn't.\n"
+        if result.mass_g is not None
+        else ""
+    )
+
     report = f"""# ZooMounter Inspection Report
 
 ## Request
@@ -177,21 +218,22 @@ def write_report(
 - Lever arm: {thickness.lever_arm_mm:.2f} mm
 - Bending moment: {thickness.moment_n_mm:.1f} N*mm
 - Allowable stress (yield / safety factor): {thickness.allowable_stress_mpa:.1f} MPa
-- Thickness from stress/bearing limit: {thickness.thickness_from_stress_mm:.2f} mm
+- Thickness from stress limit: {thickness.thickness_from_stress_mm:.2f} mm
 - Thickness from deflection limit (arm/300, radial only): {thickness.thickness_from_deflection_mm:.2f} mm
 - Process minimum wall: {thickness.min_wall_mm:.2f} mm
-- **Required thickness: {thickness.required_thickness_mm:.2f} mm**
+- **Required thickness: {thickness.required_thickness_mm:.2f} mm** (governed by: {thickness.governing_limit})
+{notes_block}
+## Verification (generated part vs. the spec it was asked for)
 
-## Verification (generated part, measured via Zoo File Format API)
-Two independent checks -- both must pass:
+Hole positions and bounding box are read directly out of the generated STEP
+file (local parse, no API calls). Volume is measured by Zoo's File Format API.
 
-| Check | Expected (hand calc) | Actual (measured on generated STEP) | Difference | Pass? |
-|---|---|---|---|---|
-| Volume | {result.volume.expected:.1f} mm3 | {result.volume.actual:.1f} mm3 | {result.volume.percent_diff:.1f}% | {"PASS" if result.volume.passed else "FAIL"} |
-| Mass | {result.mass.expected:.2f} g | {result.mass.actual:.2f} g | {result.mass.percent_diff:.1f}% | {"PASS" if result.mass.passed else "FAIL"} |
+| Check | Result | Detail |
+|---|---|---|
+{check_rows}
 
-Tolerance: {int(verify.TOLERANCE_FRACTION * 100)}% on each check.
-
+Tolerances: {POSITION_TOLERANCE_MM}mm absolute on hole positions, {int(verify.TOLERANCE_FRACTION * 100)}% on bulk dimensions and volume.
+{hole_rows}{mass_line}
 ## Result: {status}
 """
     path.write_text(report, encoding="utf-8")
