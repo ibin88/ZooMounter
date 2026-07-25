@@ -62,6 +62,16 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Where to write the generated files (default: a uniquely-named folder under ./output, e.g. output/nema17_aluminum_6061_20260724_143022)",
     )
+    p.add_argument(
+        "--print-prompt",
+        action="store_true",
+        help="Run the sizing calc, print the Agent API prompt, and stop. No network calls, no credits, no Zoo CLI needed -- paste the prompt into Design Studio yourself.",
+    )
+    p.add_argument(
+        "--no-export",
+        action="store_true",
+        help="Generate the KCL project but skip the STEP export and verification. Removes the dependency on the Zoo CLI binary -- open the output folder in Design Studio and let the app do the rest.",
+    )
 
     custom_mount = p.add_argument_group("--mount custom options")
     custom_mount.add_argument("--plate-width-mm", type=float)
@@ -79,7 +89,38 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def apply_defaults_noninteractive(args: argparse.Namespace) -> None:
+    """Fill in anything the user didn't pass, using the documented defaults.
+
+    Used when there's no terminal to prompt at -- a script, a CI job, or the
+    MCP server. Without this, any omitted flag sends the CLI into an
+    interactive prompt that immediately dies on EOF.
+    """
+    args.mount = args.mount or "nema17"
+    args.material = args.material or "aluminum_6061"
+    args.load_type = args.load_type or "radial"
+    if args.load_n is None:
+        args.load_n = 5.0
+
+
 def fill_in_interactively(args: argparse.Namespace) -> None:
+    """Prompt for anything missing -- but never block a non-interactive run.
+
+    Deliberately does NOT gate on `isatty()`. That check is unreliable (some
+    shells hand over a tty with nothing readable behind it) and it would also
+    throw away piped answers, which are a legitimate way to script this.
+    Instead, just try to prompt: a terminal answers, a pipe answers, and
+    anything with no input at all raises EOFError, which means "use the
+    documented defaults" rather than "crash".
+    """
+    try:
+        _prompt_for_missing(args)
+    except EOFError:
+        console.print("[dim]No interactive input available; using defaults.[/dim]")
+        apply_defaults_noninteractive(args)
+
+
+def _prompt_for_missing(args: argparse.Namespace) -> None:
     console.print(Panel.fit("[bold]ZooMounter[/bold]\nA few questions to size and generate your mount.", border_style="cyan"))
 
     if not args.mount:
@@ -278,6 +319,13 @@ def main(argv: list[str] | None = None) -> int:
     print_spec_summary(mount, material, args, thickness)
 
     prompt = generate.build_prompt(mount, material, thickness.required_thickness_mm)
+
+    if args.print_prompt:
+        # Everything above this line is local arithmetic -- no token, no
+        # credits, no Zoo CLI. Paste the result into Design Studio's chat.
+        console.print(Panel(prompt, title="Agent API prompt", border_style="cyan"))
+        return 0
+
     console.print(f"\n[dim]Agent API prompt:[/dim] {prompt}\n")
 
     def on_status(elapsed: float, status: str) -> None:
@@ -290,6 +338,17 @@ def main(argv: list[str] | None = None) -> int:
         with console.status("[bold cyan]Generating via Zoo Agent API...[/bold cyan] submitting...") as spinner:
             kcl_code = generate.generate_kcl(prompt, on_status=on_status)
             kcl_path = generate.write_kcl_project(kcl_code, output_dir)
+
+            if args.no_export:
+                spinner.stop()
+                console.print(f"[green]Zoo project written:[/green] {kcl_path.parent}")
+                console.print(
+                    "[dim]Skipped STEP export and verification (--no-export). Open that folder "
+                    "in Zoo Design Studio, or run:[/dim]"
+                )
+                console.print(f"[dim]  zoo app {kcl_path.parent}[/dim]")
+                return 0
+
             spinner.update("[bold cyan]Executing KCL into a STEP file via Zoo CLI...[/bold cyan]")
             step_path = generate.export_step(kcl_path, output_dir)
 

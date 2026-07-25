@@ -97,6 +97,21 @@ rendered preview of the generated part, and an **"Export STEP + verify"**
 toggle — uncheck it for a fast preview-only run that skips the STEP export and
 verification.
 
+### Working without credits, or without the Zoo CLI
+
+Two flags exist because not every question needs a generation:
+
+```bash
+# Size it and print the text-to-CAD prompt. No network, no credits, no Zoo CLI.
+# Paste the result straight into Zoo Design Studio's chat.
+python -m zoomounter.cli --mount nema23 --material aluminum_6061 \
+  --load-n 200 --safety-factor 2.5 --print-prompt
+
+# Generate the Zoo project but skip STEP export and verification.
+# Removes the Zoo CLI dependency entirely — open the folder in Design Studio.
+python -m zoomounter.cli --mount nema17 --material petg --load-n 40 --no-export
+```
+
 Every run writes to its own timestamped folder under `./output/`, containing
 `main.kcl` + `project.toml` (**open the `output/` folder in Zoo Design Studio**
 — not the repo root — to see each generated part as its own project),
@@ -146,6 +161,53 @@ all-clear.
 Every report names which limit actually governed — including when it's just the
 minimum manufacturable wall thickness, which means the part isn't structurally
 limited at that load at all.
+
+## Use it from an AI assistant (MCP)
+
+ZooMounter ships an MCP server, so any MCP-capable assistant can drive it in
+conversation — *"how thick does a NEMA 23 mount need to be for a 200N belt
+load in aluminium?"* runs the real calc rather than guessing.
+
+```bash
+python -m zoomounter.mcp_server
+```
+
+| Tool | Cost |
+|---|---|
+| `list_options` | free, instant |
+| `size_mount` | free, instant — the sizing calc |
+| `build_prompt` | free, instant — the text-to-CAD prompt |
+| `inspect_step_file` | free, instant — reads holes/bbox out of any STEP file |
+| `verify_step_file` | one API call |
+| `generate_mount` | **slow, costs credits** — full generate + verify |
+
+The split is deliberate: an assistant asked for a number shouldn't burn three
+minutes and API credits generating a part. The tool descriptions say so
+explicitly.
+
+**Claude Code** — a `.mcp.json` is included; it's picked up automatically when
+you open this folder.
+
+**Gemini CLI** — add the same block to `~/.gemini/settings.json`.
+
+Both need `ZOO_API_TOKEN` in `.env` for the tools that call the API. The three
+free tools work without it.
+
+## Running it as a `zoo` subcommand
+
+The Zoo CLI has no plugin system, but `zoo alias` supports shell expansions,
+which gets you the same thing:
+
+```bash
+zoo alias set zoomounter '!cd /path/to/ZooMounter && python -m zoomounter.cli "$@"'
+zoo zoomounter --mount nema17 --material petg --load-n 40
+```
+
+And to open any generated project straight in the desktop app:
+
+```bash
+zoo app output/nema17_petg_20260725_143022
+```
 
 ## Tests
 

@@ -3,3 +3,4 @@ python-dotenv>=1.0
 rich>=13.7
 customtkinter>=5.2
 pillow>=10.0
+mcp[cli]>=1.2

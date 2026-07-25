@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "zoomounter": {
+      "command": "D:/PersonalFiles/Engineering Work/projects/Zoo API Makeathon - Mechatronics Mount Generator/ZooMounter/.venv/Scripts/python.exe",
+      "args": ["-m", "zoomounter.mcp_server"],
+      "cwd": "D:/PersonalFiles/Engineering Work/projects/Zoo API Makeathon - Mechatronics Mount Generator/ZooMounter"
+    }
+  }
+}
