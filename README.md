@@ -235,6 +235,13 @@ corrupted part.
 - **Verification can't see features it wasn't told about.** It checks the holes
   and envelope it asked for; a chamfer or fillet the model added on its own
   shows up (if at all) only as a small volume difference.
+- **Verification cannot check its own spec.** It proves the AI built what was
+  asked for, not that the ask was right. ZooMounter shipped with the NEMA bolt
+  patterns wrong (square spacing misread as a bolt-circle diameter — holes
+  6.4mm out of position) and *every check passed*, because the generated part
+  faithfully matched a wrong table. It took an independently-modelled assembly
+  to catch. See
+  [WHY-POSITION-CHECKING-MATTERS.md](examples/WHY-POSITION-CHECKING-MATTERS.md).
 - **`--mount custom` is circular-pattern only.** The built-in rectangular
   patterns aren't yet expressible as arbitrary custom coordinates from the CLI.
 - **The axial screw-tension estimate assumes class-8.8 steel fasteners** at the

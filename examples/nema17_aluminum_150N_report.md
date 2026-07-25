@@ -29,7 +29,7 @@ file (local parse, no API calls). Volume is measured by Zoo's File Format API.
 |---|---|---|
 | Hole positions | PASS | all 5 holes present and within 0.5mm of spec (worst: 0.000mm) |
 | Bounding box | PASS | 42.30 x 42.30 x 4.65 mm vs specified 42.30 x 42.30 x 4.65 mm (worst axis: thickness, 0.0%) |
-| Volume | PASS | 6422.7 mm3 measured vs 6419.8 mm3 from the requested geometry (0.0%) |
+| Volume | PASS | 6385.5 mm3 measured vs 6382.4 mm3 from the requested geometry (0.0%) |
 
 Tolerances: 0.5mm absolute on hole positions, 15% on bulk dimensions and volume.
 
@@ -37,12 +37,12 @@ Tolerances: 0.5mm absolute on hole positions, 15% on bulk dimensions and volume.
 
 | Expected (x, y) mm | Dia mm | Found at (x, y) mm | Position error mm |
 |---|---|---|---|
-| (15.50, 0.00) | 3.00 | (15.50, 0.00) | 0.000 |
-| (0.00, 15.50) | 3.00 | (-0.00, 15.50) | 0.000 |
-| (-15.50, 0.00) | 3.00 | (-15.50, 0.00) | 0.000 |
-| (-0.00, -15.50) | 3.00 | (-0.00, -15.50) | 0.000 |
+| (15.50, 15.50) | 3.40 | (15.50, 15.50) | 0.000 |
+| (15.50, -15.50) | 3.40 | (15.50, -15.50) | 0.000 |
+| (-15.50, -15.50) | 3.40 | (-15.50, -15.50) | 0.000 |
+| (-15.50, 15.50) | 3.40 | (-15.50, 15.50) | 0.000 |
 | (0.00, 0.00) | 22.00 | (-0.00, -0.00) | 0.000 |
 
-Mass of the generated part: **17.34 g**. This is reported as a property, not counted as a check -- it is the measured volume multiplied by the density you supplied, so it carries no information the volume check doesn't.
+Mass of the generated part: **17.24 g**. This is reported as a property, not counted as a check -- it is the measured volume multiplied by the density you supplied, so it carries no information the volume check doesn't.
 
 ## Result: PASS

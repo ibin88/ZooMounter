@@ -18,7 +18,7 @@ import pytest
 
 from zoomounter.materials import get_material
 from zoomounter.mechanics import required_thickness
-from zoomounter.mount_specs import get_mount
+from zoomounter.mount_specs import get_mount, square_bolt_pattern
 from zoomounter.step_inspect import match_holes, parse_step
 from zoomounter.verify import check_bounding_box, check_hole_positions, expected_holes
 
@@ -26,35 +26,53 @@ FIXTURES = Path(__file__).parent
 GOOD_STEP = FIXTURES.parent / "examples" / "nema17_aluminum_example.step"
 DRIFTED_STEP = FIXTURES / "fixture_nema17_drifted_hole.step"
 
+# The fixtures are a real generated NEMA 17 plate: aluminium, 150N radial
+# load, SF 2 -> 4.65mm thick (deflection-governed). Kept as a named constant
+# so a regenerated fixture only needs updating in one place.
+FIXTURE_THICKNESS_MM = 4.65
+
 
 # ---- STEP parsing -----------------------------------------------------
 
 
 def test_parses_nema17_geometry():
     """The parser should recover the exact plate the spec asked for."""
+    mount = get_mount("nema17")
     geo = parse_step(GOOD_STEP)
-    assert geo.bbox.width_mm == pytest.approx(42.3, abs=0.01)
-    assert geo.bbox.height_mm == pytest.approx(42.3, abs=0.01)
-    assert geo.bbox.thickness_mm == pytest.approx(1.0, abs=0.01)
+    assert geo.bbox.width_mm == pytest.approx(mount.plate_width_mm, abs=0.01)
+    assert geo.bbox.height_mm == pytest.approx(mount.plate_height_mm, abs=0.01)
+    assert geo.bbox.thickness_mm == pytest.approx(FIXTURE_THICKNESS_MM, abs=0.01)
 
 
 def test_merges_coincident_circles_into_one_hole_each():
     """A NEMA17 plate has 4 bolt holes + 1 centre bore. Each shows up as
     several circular edges in the file; we should end up with 5 holes, not 20."""
+    mount = get_mount("nema17")
     geo = parse_step(GOOD_STEP)
     assert len(geo.circles) == 5
-    bolt_holes = [c for c in geo.circles if c.diameter_mm == pytest.approx(3.0, abs=0.01)]
-    centre = [c for c in geo.circles if c.diameter_mm == pytest.approx(22.0, abs=0.01)]
+    bolt_holes = [
+        c for c in geo.circles if c.diameter_mm == pytest.approx(mount.bolt_hole_dia_mm, abs=0.01)
+    ]
+    centre = [
+        c for c in geo.circles if c.diameter_mm == pytest.approx(mount.center_hole_dia_mm, abs=0.01)
+    ]
     assert len(bolt_holes) == 4
     assert len(centre) == 1
 
 
-def test_bolt_holes_sit_on_the_specified_bolt_circle():
+def test_bolt_holes_sit_at_the_square_corners():
+    """The generated part must match the real NEMA square pattern -- holes on
+    the diagonal at s/sqrt(2), not on the axes at s/2."""
+    mount = get_mount("nema17")
     geo = parse_step(GOOD_STEP)
-    bolt_holes = [c for c in geo.circles if c.diameter_mm == pytest.approx(3.0, abs=0.01)]
+    bolt_holes = [
+        c for c in geo.circles if c.diameter_mm == pytest.approx(mount.bolt_hole_dia_mm, abs=0.01)
+    ]
+    assert len(bolt_holes) == 4
     for hole in bolt_holes:
-        radius = math.hypot(hole.x_mm, hole.y_mm)
-        assert radius == pytest.approx(15.5, abs=0.01)  # 31mm bolt circle
+        assert abs(hole.x_mm) == pytest.approx(15.5, abs=0.01)
+        assert abs(hole.y_mm) == pytest.approx(15.5, abs=0.01)
+        assert math.hypot(hole.x_mm, hole.y_mm) == pytest.approx(21.92, abs=0.02)
 
 
 # ---- the verifier catching real problems -------------------------------
@@ -89,7 +107,7 @@ def test_bounding_box_is_blind_to_hole_position():
     """Documents a real limitation: the drifted part has the same outline, so
     the bbox check cannot see the problem. Only the hole check can."""
     geo = parse_step(DRIFTED_STEP)
-    assert check_bounding_box(geo, get_mount("nema17"), 1.0).passed
+    assert check_bounding_box(geo, get_mount("nema17"), FIXTURE_THICKNESS_MM).passed
 
 
 def test_volume_is_blind_to_hole_position():
@@ -127,6 +145,47 @@ def test_matching_pairs_on_size_before_position():
     for m in matches:
         assert m.found
         assert m.diameter_error_mm < 0.01
+
+
+# ---- NEMA bolt patterns (regression) -------------------------------------
+# ZooMounter originally built these with circular_bolt_pattern(4, spacing),
+# which put the holes at the midpoints of the plate edges instead of the
+# corners -- a 6.4mm error per hole on a NEMA 17, and a plate that will not
+# bolt to a motor. Caught by comparing against a hand-built gantry assembly,
+# NOT by ZooMounter's own verification, which checks generated parts against
+# this same table and so happily confirmed the wrong geometry.
+
+
+@pytest.mark.parametrize(
+    "mount_key, spacing_mm",
+    [("nema17", 31.0), ("nema23", 47.14)],
+)
+def test_nema_holes_are_at_square_corners_not_on_a_bolt_circle(mount_key, spacing_mm):
+    """NEMA quotes a square spacing between hole centres, not a bolt-circle
+    diameter. Holes must sit at (+/-s/2, +/-s/2)."""
+    mount = get_mount(mount_key)
+    half = spacing_mm / 2
+    expected = {(half, half), (half, -half), (-half, -half), (-half, half)}
+    actual = {(round(x, 4), round(y, 4)) for x, y in mount.hole_positions}
+    assert actual == {(round(x, 4), round(y, 4)) for x, y in expected}
+
+    # Every hole is on the diagonal, at s/sqrt(2) -- NOT at s/2, which is what
+    # the old bug produced.
+    for x, y in mount.hole_positions:
+        assert math.hypot(x, y) == pytest.approx(half * math.sqrt(2), abs=0.01)
+        assert math.hypot(x, y) != pytest.approx(half, abs=0.01)
+
+
+def test_nema_bolt_holes_are_clearance_not_interference():
+    """M3 needs >3mm and M5 needs >5mm to actually pass a screw through."""
+    assert get_mount("nema17").bolt_hole_dia_mm > 3.0
+    assert get_mount("nema23").bolt_hole_dia_mm > 5.0
+
+
+def test_square_bolt_pattern_helper():
+    holes = square_bolt_pattern(31.0)
+    assert len(holes) == 4
+    assert all(abs(abs(x) - 15.5) < 1e-6 and abs(abs(y) - 15.5) < 1e-6 for x, y in holes)
 
 
 # ---- sizing calcs -------------------------------------------------------

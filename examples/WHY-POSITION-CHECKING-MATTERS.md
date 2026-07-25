@@ -77,6 +77,36 @@ Three checks, and they fail for genuinely different reasons:
 Mass is still reported, because it's a thing you want to know about a part.
 It is *not* counted as a check, because it isn't an independent one.
 
+## The second lesson: a verifier can't check its own spec
+
+Later, while integrating ZooMounter into a hand-built gantry assembly, a worse
+bug surfaced — and this one the verification above could never have caught.
+
+The NEMA bolt patterns were **wrong**. NEMA quotes a *square spacing* between
+hole centres (31mm for a NEMA 17), not a bolt-circle diameter. ZooMounter fed
+that number to `circular_bolt_pattern()`, which placed the holes at the
+midpoints of the plate edges instead of the corners:
+
+| | Hole positions | Radius |
+|---|---|---|
+| ZooMounter (wrong) | (±15.5, 0), (0, ±15.5) | 15.50mm |
+| A real NEMA 17 | (±15.5, ±15.5) | 21.92mm |
+
+Every NEMA mount it had ever produced was unusable — the bolts miss by 6.4mm.
+
+**And every verification passed.** Hole positions, bounding box, volume: all
+green, every time. Because verification compares the generated part against
+`mount_specs.py` — so when the table is wrong, the generated part is
+faithfully, verifiably wrong.
+
+This is the limit of the whole approach, and it's worth stating plainly:
+verification proves the AI built what you asked for. It cannot prove you asked
+for the right thing. Catching that needed an external reference — in this case
+a gantry assembly modelled independently, whose motor faceplates put the holes
+where a real motor has them.
+
+Both bugs are now regression-tested (`test_nema_holes_are_at_square_corners_not_on_a_bolt_circle`).
+
 ## Reproducing this
 
 Both fixtures and the assertions above are in the test suite, which runs

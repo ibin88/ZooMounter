@@ -23,11 +23,38 @@ from dataclasses import dataclass
 
 def circular_bolt_pattern(count: int, circle_dia_mm: float) -> tuple[tuple[float, float], ...]:
     """N holes evenly spaced on a circle of the given diameter, centered on
-    the origin."""
+    the origin. The first hole sits on the +X axis."""
     radius = circle_dia_mm / 2
     return tuple(
         (round(radius * math.cos(2 * math.pi * i / count), 4), round(radius * math.sin(2 * math.pi * i / count), 4))
         for i in range(count)
+    )
+
+
+def square_bolt_pattern(spacing_mm: float) -> tuple[tuple[float, float], ...]:
+    """Four holes at the corners of a square of the given side length,
+    centred on the origin -- i.e. at (+/-s/2, +/-s/2).
+
+    This is how NEMA motor faceplates are actually dimensioned, and getting
+    it wrong is subtle: the NEMA spec quotes a *square spacing* between hole
+    centres, NOT a bolt-circle diameter. Feeding that number to
+    circular_bolt_pattern() puts the holes at the midpoints of the plate
+    edges instead of the corners, at a radius of s/2 rather than s/sqrt(2).
+    For a NEMA 17 that is a 6.4mm positional error on every hole, and the
+    plate will not bolt to the motor.
+
+    ZooMounter shipped exactly that bug until it was caught by comparing
+    against a hand-built assembly. Its own verification never flagged it,
+    because verification checks the generated part against this table -- so
+    a wrong table produces a wrong part that passes every check. Worth
+    remembering: self-consistent verification cannot catch a wrong spec.
+    """
+    half = spacing_mm / 2
+    return (
+        (round(half, 4), round(half, 4)),
+        (round(half, 4), round(-half, 4)),
+        (round(-half, 4), round(-half, 4)),
+        (round(-half, 4), round(half, 4)),
     )
 
 
@@ -62,8 +89,12 @@ MOUNTS: dict[str, MountSpec] = {
         kind="motor",
         plate_width_mm=42.3,
         plate_height_mm=42.3,
-        bolt_hole_dia_mm=3.0,
-        hole_positions=circular_bolt_pattern(4, 31.0),
+        # M3 fasteners. 3.4mm is ISO 273 "normal" clearance -- a 3.0mm hole
+        # would be an interference fit on an M3 screw, not a clearance hole.
+        bolt_hole_dia_mm=3.4,
+        # 31mm SQUARE spacing (NEMA standard), not a bolt circle. See
+        # square_bolt_pattern() for why that distinction matters.
+        hole_positions=square_bolt_pattern(31.0),
         center_hole_dia_mm=22.0,
         typical_mass_kg=0.28,  # representative mid-length NEMA17 (~40mm body); varies ~0.2-0.4kg by length
         typical_body_length_mm=40.0,
@@ -73,8 +104,8 @@ MOUNTS: dict[str, MountSpec] = {
         kind="motor",
         plate_width_mm=56.4,
         plate_height_mm=56.4,
-        bolt_hole_dia_mm=5.0,
-        hole_positions=circular_bolt_pattern(4, 47.14),
+        bolt_hole_dia_mm=5.5,  # M5 fasteners, ISO 273 normal clearance
+        hole_positions=square_bolt_pattern(47.14),  # 47.14mm square spacing, not a bolt circle
         center_hole_dia_mm=38.1,
         typical_mass_kg=0.7,  # representative mid-length NEMA23 (~56mm body); varies ~0.5-1.0kg by length
         typical_body_length_mm=56.0,
