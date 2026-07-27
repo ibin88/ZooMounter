@@ -12,13 +12,13 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from dotenv import load_dotenv
 from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import FloatPrompt, IntPrompt, Prompt
 from rich.table import Table
 
 from . import generate, mechanics, verify
+from .config import load_environment
 from .materials import MATERIALS, get_material
 from .mount_specs import MOUNTS, get_mount
 from .verify import POSITION_TOLERANCE_MM
@@ -281,7 +281,7 @@ Tolerances: {POSITION_TOLERANCE_MM}mm absolute on hole positions, {int(verify.TO
 
 
 def main(argv: list[str] | None = None) -> int:
-    load_dotenv()
+    load_environment()
 
     parser = build_parser()
     args = parser.parse_args(argv)

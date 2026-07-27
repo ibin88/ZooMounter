@@ -16,6 +16,7 @@ from pathlib import Path
 
 import requests
 
+from .config import zoo_cli_path
 from .materials import Material
 from .mount_specs import MountSpec
 
@@ -121,7 +122,7 @@ def _write_project_toml(output_dir: Path) -> None:
 
 
 def _zoo_cli() -> str:
-    return os.environ.get("ZOO_CLI_PATH", "zoo")
+    return zoo_cli_path()
 
 
 def write_kcl_project(kcl_code: str, output_dir: Path) -> Path:

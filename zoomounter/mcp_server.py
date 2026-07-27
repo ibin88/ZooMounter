@@ -23,16 +23,16 @@ Run it with:  python -m zoomounter.mcp_server
 from pathlib import Path
 from typing import Any
 
-from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
 
 from . import generate, mechanics, verify
+from .config import load_environment
 from .cli import default_output_dir, write_report
 from .materials import MATERIALS, get_material
 from .mount_specs import MOUNTS, get_mount
 from .step_inspect import StepParseError, parse_step
 
-load_dotenv()
+load_environment()
 
 mcp = FastMCP("zoomounter")
 

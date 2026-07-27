@@ -21,10 +21,10 @@ import uuid
 from pathlib import Path
 
 import customtkinter as ctk
-from dotenv import load_dotenv
 from PIL import Image
 
 from . import generate, mechanics, verify
+from .config import load_environment
 from .cli import default_output_dir, write_report
 from .materials import MATERIALS, get_material
 from .mount_specs import MOUNTS, get_mount
@@ -406,7 +406,7 @@ class App(ctk.CTk):
 
 
 def main() -> int:
-    load_dotenv()
+    load_environment()
     app = App()
     app.mainloop()
     return 0
