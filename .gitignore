@@ -15,3 +15,6 @@ thumbnail.png
 main.kcl
 .pytest_cache/
 .vscode/
+*.egg-info/
+build/
+dist/

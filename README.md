@@ -67,17 +67,47 @@ no information the volume check doesn't.
 > [examples/WHY-POSITION-CHECKING-MATTERS.md](examples/WHY-POSITION-CHECKING-MATTERS.md).
 > That's the reason the hole-position check exists.
 
+## Already mid-project? Start here.
+
+The common case isn't "I want to make a mount" — it's *"I'm halfway through a
+design and just realised I need one."* For that:
+
+```bash
+cd my-zoo-project
+zoomounter --mount nema23 --material aluminum_6061 --load-n 120 --add xMotorMount
+```
+
+That's the whole thing. ZooMounter finds your Zoo project by walking up from
+wherever you are (like `git` finds `.git`), writes `xMotorMount.kcl` alongside
+your other parts, and adds the `import` to `main.kcl`. Reload Design Studio
+and it's in your assembly.
+
+No paths to type, no folder to pick, nothing to wire up by hand. The generated
+file follows your project's own conventions — a flat `.kcl` at the project
+root ending in `export xMotorMount = ...` — so it's indistinguishable from a
+part you wrote yourself, and you can edit it freely afterwards.
+
+It won't touch anything it doesn't have to: your line endings are preserved,
+the import is only added once (re-run to regenerate with new numbers), and if
+you're not inside a Zoo project it says so immediately rather than spending
+three minutes generating something with nowhere to go.
+
 ## Install
 
 ```bash
-pip install -r requirements.txt
+pip install -e ".[all]"     # or just ".[mcp]" / ".[gui]" for less
 ```
+
+That puts `zoomounter`, `zoomounter-gui` and `zoomounter-mcp` on your PATH.
 
 Also required:
 - A [Zoo API token](https://zoo.dev/signup) — copy `.env.example` to `.env` and paste it in.
-- The [Zoo CLI](https://github.com/KittyCAD/cli/releases) on your PATH (or set
-  `ZOO_CLI_PATH` in `.env`). It executes the generated KCL into a STEP file —
-  see [NOTES-FOR-ZOO.md](NOTES-FOR-ZOO.md) §2 for why this is a separate binary.
+  ZooMounter finds this file wherever you run it from, so a project-local
+  `.env` works too if you'd rather keep tokens per project.
+- The [Zoo CLI](https://github.com/KittyCAD/cli/releases) on your PATH, *only*
+  for STEP export and verification — `--add`, `--no-export` and `--print-prompt`
+  don't need it. See [NOTES-FOR-ZOO.md](NOTES-FOR-ZOO.md) §2 for why it's a
+  separate binary.
 
 ## Usage
 

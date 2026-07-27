@@ -17,7 +17,7 @@ from rich.panel import Panel
 from rich.prompt import FloatPrompt, IntPrompt, Prompt
 from rich.table import Table
 
-from . import generate, mechanics, verify
+from . import generate, mechanics, verify, zoo_project
 from .config import load_environment
 from .materials import MATERIALS, get_material
 from .mount_specs import MOUNTS, get_mount
@@ -71,6 +71,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-export",
         action="store_true",
         help="Generate the KCL project but skip the STEP export and verification. Removes the dependency on the Zoo CLI binary -- open the output folder in Design Studio and let the app do the rest.",
+    )
+    p.add_argument(
+        "--add",
+        metavar="PART_NAME",
+        default=None,
+        help="Drop the mount straight into the Zoo project you're standing in: writes PART_NAME.kcl "
+        "alongside your other parts and adds the import to main.kcl. Finds the project by walking up "
+        "from the current directory, so no paths needed. e.g. --add xMotorMount",
     )
 
     custom_mount = p.add_argument_group("--mount custom options")
@@ -280,11 +288,63 @@ Tolerances: {POSITION_TOLERANCE_MM}mm absolute on hole positions, {int(verify.TO
     path.write_text(report, encoding="utf-8")
 
 
+def _add_to_project(args, mount, material, thickness, kcl_code: str) -> int:
+    """Write the generated part into the surrounding Zoo project and wire it in."""
+    project = zoo_project.find_project()
+    if project is None:  # pragma: no cover -- guarded earlier in main()
+        console.print("[red]error:[/red] not inside a Zoo project.")
+        return 1
+
+    comment = (
+        f"{mount.name} in {material.name}, {args.load_n}N {thickness.load_type} load, "
+        f"SF {args.safety_factor} -> {thickness.required_thickness_mm:.2f}mm thick "
+        f"(governed by {thickness.governing_limit})"
+    )
+    try:
+        part_path, entry_modified = zoo_project.add_part(
+            project, args.add, kcl_code, comment=comment
+        )
+    except zoo_project.ProjectError as e:
+        console.print(f"[red]error:[/red] {e}")
+        return 1
+
+    console.print(f"[green]Added to project '{project.name}':[/green] {part_path.name}")
+    if entry_modified:
+        console.print(f"  [dim]imported from {project.entry.name} and instantiated[/dim]")
+    else:
+        console.print(
+            f"  [dim]{project.entry.name} already imported it -- part file updated in place[/dim]"
+        )
+    console.print(f"  [dim]{comment}[/dim]")
+    for note in thickness.notes:
+        style = "yellow" if note.startswith("WARNING") else "dim"
+        console.print(f"  [{style}]- {note}[/{style}]")
+    console.print(
+        f"\n[dim]Reload the project in Design Studio to see it, or:[/dim] zoo app {project.root}"
+    )
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     load_environment()
 
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    # Check this before generating: --add is a 1-3 minute, credit-spending
+    # round trip, and discovering afterwards that there was nowhere to put the
+    # result is a rotten way to find out.
+    if args.add and zoo_project.find_project() is None:
+        console.print(
+            "[red]error:[/red] --add needs to be run from inside a Zoo project "
+            "(a folder with a project.toml, or any subfolder of one)."
+        )
+        console.print(f"[dim]Looked upward from:[/dim] {Path.cwd()}")
+        console.print(
+            "[dim]Either cd into your project, or drop --add to write to ./output instead.[/dim]"
+        )
+        return 1
+
     fill_in_interactively(args)
 
     try:
@@ -337,6 +397,11 @@ def main(argv: list[str] | None = None) -> int:
     try:
         with console.status("[bold cyan]Generating via Zoo Agent API...[/bold cyan] submitting...") as spinner:
             kcl_code = generate.generate_kcl(prompt, on_status=on_status)
+
+            if args.add:
+                spinner.stop()
+                return _add_to_project(args, mount, material, thickness, kcl_code)
+
             kcl_path = generate.write_kcl_project(kcl_code, output_dir)
 
             if args.no_export:

@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "zoomounter"
+version = "0.2.0"
+description = "Generate mechanical mounting plates from an engineering spec, then verify the generated geometry actually matches it. Built on Zoo's Agent and File Format APIs."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Ibin Menon Reghunandan" }]
+keywords = ["cad", "kcl", "zoo", "mechanical", "nema", "text-to-cad", "mcp"]
+classifiers = [
+    "Intended Audience :: Manufacturing",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering",
+]
+dependencies = [
+    "requests>=2.31",
+    "python-dotenv>=1.0",
+    "rich>=13.7",
+]
+
+[project.optional-dependencies]
+gui = ["customtkinter>=5.2", "pillow>=10.0"]
+mcp = ["mcp[cli]>=1.2"]
+all = ["customtkinter>=5.2", "pillow>=10.0", "mcp[cli]>=1.2"]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+# This is what makes `zoomounter` a real command after `pip install`, instead
+# of a hand-written shim with someone's absolute paths baked into it.
+zoomounter = "zoomounter.cli:main"
+zoomounter-gui = "zoomounter.gui:main"
+zoomounter-mcp = "zoomounter.mcp_server:main"
+
+[project.urls]
+Homepage = "https://github.com/ibin88/ZooMounter"
+Issues = "https://github.com/ibin88/ZooMounter/issues"
+
+[tool.setuptools]
+packages = ["zoomounter"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
