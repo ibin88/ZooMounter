@@ -1,0 +1,365 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ZooMounter — Mechanics Reference</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1a1a1a; --muted: #5b6572; --line: #d7dce2;
+    --panel: #f5f7f9; --warn-bg: #fdf4e4; --warn-line: #d9a441;
+    --bad-bg: #fdecea; --bad-line: #c0392b; --good: #1f7a4d;
+    --red: #c0392b; --blue: #1f6f8b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14171a; --fg: #e8eaed; --muted: #9aa4b0; --line: #2c3238;
+      --panel: #1c2126; --warn-bg: #2e2716; --warn-line: #a8812f;
+      --bad-bg: #2e1a18; --bad-line: #c0392b; --good: #4cc38a;
+    }
+  }
+  html { color-scheme: light dark; }
+  body {
+    margin: 0; padding: 2.5rem 1.25rem 5rem; background: var(--bg); color: var(--fg);
+    font: 16px/1.65 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  main { max-width: 60rem; margin: 0 auto; }
+  h1 { font-size: 1.9rem; margin: 0 0 .35rem; letter-spacing: -.02em; }
+  h2 {
+    font-size: 1.3rem; margin: 3rem 0 .75rem; padding-top: 1.25rem;
+    border-top: 1px solid var(--line); letter-spacing: -.01em;
+  }
+  h3 { font-size: 1.02rem; margin: 1.75rem 0 .5rem; }
+  p, li { color: var(--fg); }
+  .lede { color: var(--muted); margin: 0 0 1.5rem; }
+  code, .mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: .9em; }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: .92rem; }
+  th, td { text-align: left; padding: .5rem .7rem; border-bottom: 1px solid var(--line); }
+  th { font-weight: 600; color: var(--muted); font-size: .82rem; text-transform: uppercase; letter-spacing: .04em; }
+  td.num { font-family: ui-monospace, Menlo, monospace; }
+  .panel, .warn, .bad {
+    padding: 1rem 1.15rem; border-radius: 8px; margin: 1.25rem 0; font-size: .94rem;
+  }
+  .panel { background: var(--panel); border: 1px solid var(--line); }
+  .warn  { background: var(--warn-bg); border: 1px solid var(--warn-line); }
+  .bad   { background: var(--bad-bg);  border: 1px solid var(--bad-line); }
+  .panel > :first-child, .warn > :first-child, .bad > :first-child { margin-top: 0; }
+  .panel > :last-child,  .warn > :last-child,  .bad > :last-child  { margin-bottom: 0; }
+  .tag {
+    display: inline-block; font-size: .7rem; font-weight: 700; letter-spacing: .06em;
+    text-transform: uppercase; padding: .12rem .45rem; border-radius: 4px; vertical-align: .1em;
+  }
+  .tag-bug { background: var(--bad-line); color: #fff; }
+  .tag-open { background: var(--warn-line); color: #1a1a1a; }
+  figure { margin: 1.5rem 0; }
+  figure svg { width: 100%; height: auto; display: block; }
+  figcaption { color: var(--muted); font-size: .85rem; margin-top: .5rem; }
+  .eq { background: var(--panel); border-left: 3px solid var(--line); padding: .6rem .9rem; margin: .8rem 0;
+        font-family: ui-monospace, Menlo, monospace; font-size: .88rem; overflow-x: auto; }
+  .updated { color: var(--muted); font-size: .82rem; }
+  ul { padding-left: 1.15rem; }
+  .scroll { overflow-x: auto; }
+</style>
+</head>
+<body>
+<main>
+
+<h1>ZooMounter — Mechanics Reference</h1>
+<p class="lede">
+  What the tool calculates, what it assumes, and where those assumptions break.
+  Written as the questions came up while building against a real X/Y gantry, so
+  it records mistakes as well as conclusions.
+</p>
+<p class="updated">Working document. Last updated 2026-07-28.</p>
+
+<!-- ================================================================= -->
+<h2>1. Coordinate system and terminology</h2>
+
+<p>
+  The mount is a thin square slab. Two dimensions are the face you bolt the
+  motor to; the third is how thick that slab is — and the third one is what
+  ZooMounter is solving for.
+</p>
+
+<figure>
+<svg viewBox="0 0 860 250" xmlns="http://www.w3.org/2000/svg" role="img"
+     font-family="ui-sans-serif, system-ui, sans-serif">
+  <title>Plate axes</title>
+  <desc>An isometric view of the mounting plate labelling plate_width_mm along X,
+        plate_height_mm along Y, and thickness along Z.</desc>
+  <g fill="none" stroke="currentColor">
+    <path d="M120,120 L320,70 L420,110 L220,160 Z" fill="#d8dde3" stroke-width="1.5"/>
+    <path d="M120,120 L220,160 L220,180 L120,140 Z" fill="#c4ccd6" stroke-width="1.5"/>
+    <path d="M220,160 L420,110 L420,130 L220,180 Z" fill="#c4ccd6" stroke-width="1.5"/>
+  </g>
+  <g stroke="#6b7683" stroke-width="1.4" fill="none" marker-end="url(#a1)">
+    <line x1="120" y1="196" x2="220" y2="236"/>
+    <line x1="236" y1="172" x2="432" y2="124"/>
+    <line x1="100" y1="120" x2="100" y2="140"/>
+  </g>
+  <defs><marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+    <path d="M0,0 L10,5 L0,10 z" fill="#6b7683"/></marker></defs>
+  <g fill="#5b6572" font-size="12.5">
+    <text x="128" y="228" font-family="ui-monospace,Menlo,monospace">plate_width_mm</text>
+    <text x="128" y="245">X — the beam width w</text>
+    <text x="300" y="166" font-family="ui-monospace,Menlo,monospace">plate_height_mm</text>
+    <text x="300" y="183">Y — unused structurally</text>
+    <text x="20" y="116" font-family="ui-monospace,Menlo,monospace">thickness</text>
+    <text x="20" y="133">Z — the answer</text>
+  </g>
+</svg>
+</figure>
+
+<table>
+  <thead><tr><th>Field</th><th>Axis</th><th>NEMA 23</th><th>Role in the calculation</th></tr></thead>
+  <tbody>
+    <tr><td class="mono">plate_width_mm</td><td>X</td><td class="num">56.4 mm</td><td>the beam width <code>w</code></td></tr>
+    <tr><td class="mono">plate_height_mm</td><td>Y</td><td class="num">56.4 mm</td><td>none — volume estimate only</td></tr>
+    <tr><td class="mono">thickness</td><td>Z</td><td class="num">solved</td><td>the beam depth <code>t</code></td></tr>
+  </tbody>
+</table>
+
+<div class="warn">
+  <p><strong>Naming trap.</strong> <code>plate_height_mm</code> is the in-plane Y
+  dimension — not vertical height, and not thickness. It collides with beam
+  theory, where a section's "height" is the dimension it bends
+  <em>through</em>, which here is the thickness.</p>
+  <p><span class="tag tag-open">open</span> On a square plate this is invisible.
+  On a rectangular mount it matters which face dimension becomes <code>w</code>,
+  and the code currently always picks <code>plate_width_mm</code> without
+  checking which way the load acts.</p>
+</div>
+
+<!-- ================================================================= -->
+<h2>2. The two load cases</h2>
+
+<p>
+  Same 120 N force produces a 5× difference in required thickness. The
+  difference is not the force — it is whether the force has a lever arm.
+</p>
+
+<h3>Radial — the plate bends</h3>
+<p>
+  A belt or gear pulls sideways on the motor shaft. The load acts some distance
+  from the plate, so it applies a bending moment. The plate is treated as a
+  cantilever beam.
+</p>
+
+<div class="eq">M = F × L<br>
+σ = 6M / (w·t²)      →  t = √(6M / w·σ)<br>
+δ = F·L³ / (3·E·I),  I = w·t³/12,  δ ≤ L/300</div>
+
+<table>
+  <thead><tr><th>Check</th><th>Result</th><th></th></tr></thead>
+  <tbody>
+    <tr><td>Stress (yield ÷ SF = 120 MPa)</td><td class="num">2.51 mm</td><td></td></tr>
+    <tr><td>Deflection (limit L/300 = 0.19 mm)</td><td class="num">4.97 mm</td><td><strong>governs</strong></td></tr>
+    <tr><td>Process minimum wall</td><td class="num">1.00 mm</td><td></td></tr>
+  </tbody>
+</table>
+
+<p>
+  <strong>Stiffness governs, not strength.</strong> At 4.97 mm the plate is
+  roughly twice as strong as it needs to be — the extra material is there to
+  stop it flexing. If your application tolerates more deflection, this number
+  drops quickly.
+</p>
+
+<h3>Axial — the plate barely cares</h3>
+<p>
+  A leadscrew pushes along the shaft axis, straight into the plate face. No
+  lever arm, no moment. The only plate-side failure mode is the screw head
+  punching through, which needs <span class="mono">0.014 mm</span> — physically
+  meaningless, so the machining floor takes over at 1.00 mm.
+</p>
+
+<div class="bad">
+  <p><strong>A thin axial result is a warning, not a green light.</strong>
+  It means the plate is not the weak link. See §4 — for real thrust loads the
+  motor's own bearings almost always fail first, and ZooMounter does not check
+  them.</p>
+</div>
+
+<!-- ================================================================= -->
+<h2>3. Where the motor actually mounts <span class="tag tag-bug">bug</span></h2>
+
+<p>
+  A NEMA motor bolts by its <strong>front faceplate — the end the shaft comes
+  out of</strong>. The body hangs behind the plate; the pulley sits just in
+  front of it. ZooMounter's default lever arm is the motor's <em>body
+  length</em>, which measures backwards from the mount, in the wrong direction
+  entirely.
+</p>
+
+<figure>
+<svg viewBox="0 0 860 220" xmlns="http://www.w3.org/2000/svg" role="img"
+     font-family="ui-sans-serif, system-ui, sans-serif">
+  <title>Shaft-end mounting</title>
+  <desc>Side view showing the motor body behind the mounting plate and the pulley
+        in front of it, with the correct short lever arm marked.</desc>
+  <rect x="60" y="40" width="14" height="140" fill="#6b7683"/>
+  <text x="30" y="200" fill="#5b6572" font-size="11">frame</text>
+  <rect x="74" y="60" width="13" height="100" fill="#d8dde3" stroke="currentColor" stroke-width="1.5"/>
+  <text x="60" y="30" fill="#5b6572" font-size="11.5">mount plate</text>
+  <rect x="87" y="70" width="160" height="80" rx="3" fill="#eceff3" stroke="#6b7683" stroke-width="1.2"/>
+  <text x="120" y="115" fill="#5b6572" font-size="12">motor body</text>
+  <text x="112" y="133" fill="#5b6572" font-size="10.5">(behind the plate)</text>
+  <rect x="47" y="104" width="27" height="11" fill="#eceff3" stroke="#6b7683" stroke-width="1.2"/>
+  <circle cx="40" cy="110" r="19" fill="#eceff3" stroke="#6b7683" stroke-width="1.2"/>
+  <text x="8" y="150" fill="#5b6572" font-size="11">pulley</text>
+  <line x1="40" y1="88" x2="40" y2="46" stroke="#c0392b" stroke-width="2.6" marker-end="url(#a2)"/>
+  <text x="52" y="52" fill="#c0392b" font-size="12.5" font-weight="700">F belt</text>
+  <defs><marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+    <path d="M0,0 L10,5 L0,10 z" fill="#c0392b"/></marker></defs>
+  <line x1="40" y1="172" x2="80" y2="172" stroke="#1f7a4d" stroke-width="1.6"/>
+  <text x="86" y="176" fill="#1f7a4d" font-size="11.5">correct arm ≈ 15 mm (shaft side)</text>
+  <line x1="87" y1="192" x2="247" y2="192" stroke="#c0392b" stroke-width="1.6" stroke-dasharray="4 3"/>
+  <text x="253" y="196" fill="#c0392b" font-size="11.5">what the code uses: 56 mm (wrong direction)</text>
+</svg>
+</figure>
+
+<div class="scroll">
+<table>
+  <thead><tr><th>Lever arm</th><th>Meaning</th><th>Deflection</th><th>Stress</th><th>Required</th></tr></thead>
+  <tbody>
+    <tr><td class="num">56 mm</td><td>motor body length — <em>current default</em></td><td class="num">4.97</td><td class="num">2.51</td><td class="num"><strong>4.97 mm</strong></td></tr>
+    <tr><td class="num">25 mm</td><td>pulley further out on the shaft</td><td class="num">2.90</td><td class="num">1.68</td><td class="num">2.90 mm</td></tr>
+    <tr><td class="num">15 mm</td><td>pulley close to the faceplate</td><td class="num">2.06</td><td class="num">1.30</td><td class="num">2.06 mm</td></tr>
+    <tr><td class="num">10 mm</td><td>pulley hard against the faceplate</td><td class="num">1.58</td><td class="num">1.06</td><td class="num">1.58 mm</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p>
+  Deflection-governed thickness scales as <span class="mono">L<sup>2/3</sup></span>,
+  so a realistic 15 mm arm gives <strong>2.06 mm instead of 4.97 mm</strong> —
+  the tool currently over-specifies by about 2.4×.
+</p>
+
+<h3>Self-weight is mis-placed too</h3>
+<p>
+  The code adds the motor's weight to the belt force and applies both at the
+  same arm. But the motor's centre of gravity is roughly half a body-length
+  <em>behind</em> the plate, which is a different arm in a different direction.
+</p>
+
+<table>
+  <thead><tr><th>Contribution</th><th>Force</th><th>Arm</th><th>Moment</th></tr></thead>
+  <tbody>
+    <tr><td>Belt tension (shaft side)</td><td class="num">120 N</td><td class="num">15 mm</td><td class="num">1800 N·mm</td></tr>
+    <tr><td>Motor weight (body side)</td><td class="num">6.87 N</td><td class="num">28 mm</td><td class="num">192 N·mm</td></tr>
+    <tr><td><strong>Correct total</strong></td><td></td><td></td><td class="num"><strong>1992 N·mm</strong></td></tr>
+    <tr><td>What the code computes</td><td class="num">126.87 N</td><td class="num">56 mm</td><td class="num">7105 N·mm — 3.6× high</td></tr>
+  </tbody>
+</table>
+
+<div class="panel">
+  <p><strong>Proposed fix.</strong> Split the single
+  <code>typical_body_length_mm</code> into two independent distances, because
+  they are genuinely two different things:</p>
+  <ul>
+    <li><code>shaft_load_offset_mm</code> — mount face to where the belt or gear
+      load acts. Drives the radial bending moment.</li>
+    <li><code>body_cg_offset_mm</code> — mount face to the motor's centre of
+      gravity, behind the plate. Drives the self-weight moment.</li>
+  </ul>
+  <p>Both are overridable, since the real number depends on the pulley you fit.
+  <code>--overhang-mm</code> already overrides the first.</p>
+</div>
+
+<!-- ================================================================= -->
+<h2>4. Axial loads: what actually carries thrust <span class="tag tag-open">gap</span></h2>
+
+<p>
+  ZooMounter answers "how thick should the plate be" and for axial thrust the
+  honest answer is "thin — that isn't your problem." But it stops there, and
+  the useful answer is what to do <em>instead</em>.
+</p>
+
+<h3>Stepper motors are not thrust bearings</h3>
+<p>
+  A stepper's internal bearings are sized to locate the rotor, not to carry
+  axial load. Manufacturers typically quote continuous axial ratings in the
+  region of tens of newtons, and it is a number worth reading off the actual
+  datasheet rather than assuming — it is easy to exceed with a leadscrew.
+  Exceed it and the failure is progressive: bearing wear, then rotor rub, then
+  lost steps.
+</p>
+
+<h3>The usual answers, roughly in order of cost</h3>
+<table>
+  <thead><tr><th>Approach</th><th>Carries</th><th>When it fits</th></tr></thead>
+  <tbody>
+    <tr><td>Thrust washer / bronze face</td><td>light, intermittent</td><td>low speed, low duty, cheapest possible</td></tr>
+    <tr><td>Thrust ball bearing</td><td>axial only</td><td>pure thrust, no side load</td></tr>
+    <tr><td>Angular contact bearing</td><td>axial + radial</td><td>leadscrews — the common right answer</td></tr>
+    <tr><td>Back-to-back angular contact pair</td><td>thrust both directions</td><td>reversing loads, preloadable</td></tr>
+    <tr><td>Fixed/floating bearing pair</td><td>thrust + thermal growth</td><td>long screws that expand in use</td></tr>
+  </tbody>
+</table>
+
+<p>
+  The important architectural point: with a proper thrust bearing, the load path
+  no longer runs through the motor at all. The screw pushes the bearing, the
+  bearing pushes its housing, the housing pushes the frame — and the motor only
+  supplies torque through a coupling that deliberately tolerates float.
+</p>
+
+<div class="panel">
+  <p><strong>What ZooMounter could do about it.</strong> Not analysis — advice
+  and geometry:</p>
+  <ul>
+    <li>On any axial run, state the thrust load and prompt the user to check it
+      against their motor's axial rating.</li>
+    <li>Add a bearing-housing mount type (the <code>bearing_608</code> entry is
+      the beginning of this, though a real one needs a shouldered pocket rather
+      than a plain through-bore).</li>
+    <li>Suggest a bearing class from the load and whether it reverses.</li>
+  </ul>
+  <p>None of this is FEA. It is the same domain-rules approach already used for
+  bolt patterns, applied to a different decision.</p>
+</div>
+
+<!-- ================================================================= -->
+<h2>5. Assumptions and limits</h2>
+
+<ul>
+  <li><strong>Hand-calc grade.</strong> Rectangular section, static load, no
+    stress concentration at the holes. A sanity check, not FEA.</li>
+  <li><strong>Fully fixed root.</strong> The plate is assumed rigidly built in
+    at the frame. Real bolted joints have some compliance, so true deflection
+    will be a little worse.</li>
+  <li><strong>Deflection limit L/300</strong> is a general bracket rule of
+    thumb, currently hard-coded. For a belt drive the number that actually
+    matters is how much misalignment throws the belt.</li>
+  <li><strong>One load type per run.</strong> Radial and axial are not
+    combined; run both and take the worse case.</li>
+  <li><strong>Motor mass and dimensions are representative</strong> for a
+    typical NEMA 17/23, not your specific motor.</li>
+  <li><strong>No fatigue.</strong> Everything here is static. A gantry that
+    reverses thousands of times a day is a fatigue problem, and this does not
+    address it.</li>
+</ul>
+
+<!-- ================================================================= -->
+<h2>6. Open decisions</h2>
+
+<table>
+  <thead><tr><th>#</th><th>Question</th><th>Why it matters</th></tr></thead>
+  <tbody>
+    <tr><td>1</td><td>Split the lever arm into shaft-side and body-side distances?</td>
+        <td>Current default over-specifies ~2.4× on a shaft-end mount. §3</td></tr>
+    <tr><td>2</td><td>Should the deflection limit be configurable?</td>
+        <td>It governs almost every radial result, and L/300 is generic. §2</td></tr>
+    <tr><td>3</td><td>Add bearing selection guidance for axial loads?</td>
+        <td>The thin-plate answer is correct but unhelpful on its own. §4</td></tr>
+    <tr><td>4</td><td>Pick <code>w</code> based on load direction on non-square plates?</td>
+        <td>Currently always <code>plate_width_mm</code>. §1</td></tr>
+    <tr><td>5</td><td>Add host-side mounting holes?</td>
+        <td>Generated plates bolt to the motor but not to the machine.</td></tr>
+  </tbody>
+</table>
+
+</main>
+</body>
+</html>
