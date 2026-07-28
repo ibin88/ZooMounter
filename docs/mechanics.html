@@ -279,12 +279,24 @@
 <h3>Stepper motors are not thrust bearings</h3>
 <p>
   A stepper's internal bearings are sized to locate the rotor, not to carry
-  axial load. Manufacturers typically quote continuous axial ratings in the
-  region of tens of newtons, and it is a number worth reading off the actual
-  datasheet rather than assuming — it is easy to exceed with a leadscrew.
-  Exceed it and the failure is progressive: bearing wear, then rotor rub, then
-  lost steps.
+  axial load — a typical hybrid stepper has plain radial ball bearings and no
+  thrust bearing at all. Published axial limits are low: a common NEMA 23
+  datasheet quotes <strong>15 lb ≈ 67 N maximum axial load</strong>. Read the
+  figure off your own motor's datasheet; it varies by manufacturer.
 </p>
+
+<div class="bad">
+  <p><strong>This makes the worked example in §2 a failure, and ZooMounter
+  said nothing.</strong></p>
+  <p>The 120 N axial case returns "1.00 mm — process minimum wall", which reads
+  like an all-clear. But 120 N is <strong>1.8× the motor's own 67 N axial
+  limit</strong>. The plate is fine; the motor is being destroyed. The tool
+  had every number it needed to say so — the load, the motor type — and
+  reported a thickness instead.</p>
+  <p>This is the strongest argument for the bearing work below: the axial path
+  doesn't need a better plate calculation, it needs the tool to say
+  <em>"don't put this load through the motor."</em></p>
+</div>
 
 <h3>The usual answers, roughly in order of cost</h3>
 <table>
@@ -321,7 +333,94 @@
 </div>
 
 <!-- ================================================================= -->
-<h2>5. Assumptions and limits</h2>
+<h2>5. Transmission systems and the loads they produce</h2>
+
+<p>
+  Belts are not the only thing a motor drives, and the load case changes
+  completely with the transmission. Everything below is derived from the motor
+  torque and the geometry, which means <strong>the load can be calculated
+  rather than guessed</strong> — currently ZooMounter asks the user for a
+  newton figure they usually have to estimate.
+</p>
+
+<div class="eq">tangential force at the drive element:  F<sub>t</sub> = T / r
+    &nbsp;&nbsp;(T = motor torque, r = pitch radius)</div>
+
+<div class="scroll">
+<table>
+  <thead><tr><th>Transmission</th><th>Radial (side) load</th><th>Axial (thrust)</th><th>Notes</th></tr></thead>
+  <tbody>
+    <tr><td>Timing belt</td><td class="num">1.5–2.0 × F<sub>t</sub></td><td>negligible</td>
+        <td>factor covers pretension; short centres reduce it</td></tr>
+    <tr><td>V-belt</td><td class="num">2.0–2.5 × F<sub>t</sub></td><td>negligible</td>
+        <td>needs more preload than a toothed belt</td></tr>
+    <tr><td>Chain / sprocket</td><td class="num">1.0–1.3 × F<sub>t</sub></td><td>negligible</td>
+        <td>little pretension needed; shock loads are the risk</td></tr>
+    <tr><td>Spur gear / rack &amp; pinion</td><td class="num">1.06 × F<sub>t</sub></td><td>negligible</td>
+        <td>separating force 0.36·F<sub>t</sub> at 20° pressure angle</td></tr>
+    <tr><td>Helical gear</td><td class="num">≈1.06 × F<sub>t</sub></td><td class="num">F<sub>t</sub>·tan(helix)</td>
+        <td>helix angle buys smoothness at the cost of thrust</td></tr>
+    <tr><td>Bevel gear</td><td>substantial</td><td>substantial</td>
+        <td>genuinely three-dimensional; out of scope for a flat plate</td></tr>
+    <tr><td>Worm drive</td><td>high</td><td>very high</td>
+        <td>worst case for both; always needs a thrust bearing</td></tr>
+    <tr><td>Leadscrew (direct)</td><td>negligible</td><td class="num">= full thrust</td>
+        <td>see §4 — the motor is the wrong thing to carry this</td></tr>
+    <tr><td>Direct coupling</td><td>negligible if aligned</td><td>negligible</td>
+        <td>reaction torque only; misalignment creates side load</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h3>Reaction torque — always present, rarely governing</h3>
+<p>
+  Whatever the motor drives, its housing feels an equal and opposite torque,
+  carried into the plate through the mounting bolts as shear:
+</p>
+<div class="eq">F<sub>bolt</sub> = T / (n × r<sub>bolt</sub>)
+&nbsp;&nbsp;→ NEMA 23 at 1.9 N·m, 4 bolts at 33.3 mm ⇒ ≈14 N per bolt</div>
+<p>
+  Small for a plate, but it is the load that sizes the <em>host-side</em>
+  attachment — which ZooMounter does not currently generate at all.
+</p>
+
+<!-- ================================================================= -->
+<h2>6. Not everything that needs a mount is a motor <span class="tag tag-open">gap</span></h2>
+
+<p>
+  The tool's framing — "give me a load, I'll give you a thickness" — fits
+  motors and bearings. For a large share of real mounts it answers a question
+  nobody asked.
+</p>
+
+<div class="scroll">
+<table>
+  <thead><tr><th>What's being mounted</th><th>Structural load</th><th>What actually decides the design</th></tr></thead>
+  <tbody>
+    <tr><td>Motor</td><td>significant</td><td>thickness, from overhung load — <em>current model fits</em></td></tr>
+    <tr><td>Bearing housing</td><td>significant</td><td>bore fit, shoulder, retention — needs a pocket, not a hole</td></tr>
+    <tr><td>Idler / tensioner</td><td>moderate</td><td><strong>adjustment slots</strong> — a fixed hole is useless here</td></tr>
+    <tr><td>Raspberry Pi / Arduino</td><td class="num">≈0</td><td>standoff height, connector clearance, airflow</td></tr>
+    <tr><td>Stepper driver</td><td class="num">≈0</td><td>heatsink clearance, wiring access</td></tr>
+    <tr><td>Limit switch / sensor</td><td class="num">≈0</td><td>positional accuracy, adjustability</td></tr>
+    <tr><td>Camera / optics</td><td class="num">≈0</td><td>vibration and rigidity, not strength</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="warn">
+  <p><strong>For electronics the thickness calculation is irrelevant.</strong>
+  A Raspberry Pi weighs 45 g. Any plate thick enough to machine will hold it.
+  The questions that matter are standoff height, whether the SD card and
+  connectors are reachable, and whether hot components have airflow — none of
+  which ZooMounter models.</p>
+  <p>Answering "1.5 mm" to "how do I mount a Pi" is technically true and
+  practically useless. Worth being honest that this is a different tool, not a
+  parameter change.</p>
+</div>
+
+<!-- ================================================================= -->
+<h2>7. Assumptions and limits</h2>
 
 <ul>
   <li><strong>Hand-calc grade.</strong> Rectangular section, static load, no
