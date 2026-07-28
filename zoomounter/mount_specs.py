@@ -115,7 +115,13 @@ MOUNTS: dict[str, MountSpec] = {
         kind="bearing",
         plate_width_mm=40.0,
         plate_height_mm=40.0,
-        bolt_hole_dia_mm=3.0,
+        # M3 normal clearance (ISO 273). Was 3.0mm, which is smaller than an M3
+        # screw -- the same interference bug that was fixed on the NEMA mounts,
+        # missed here because the regression test only covered NEMA.
+        bolt_hole_dia_mm=3.4,
+        # Unlike NEMA, a 608 pillow mount has no published bolt pattern -- this
+        # is a chosen 34mm bolt circle, and genuinely circular, so
+        # circular_bolt_pattern is correct here rather than square_bolt_pattern.
         hole_positions=circular_bolt_pattern(4, 34.0),
         center_hole_dia_mm=22.0,  # bearing OD -- see module docstring
     ),

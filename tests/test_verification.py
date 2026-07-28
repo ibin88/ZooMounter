@@ -176,10 +176,35 @@ def test_nema_holes_are_at_square_corners_not_on_a_bolt_circle(mount_key, spacin
         assert math.hypot(x, y) != pytest.approx(half, abs=0.01)
 
 
-def test_nema_bolt_holes_are_clearance_not_interference():
-    """M3 needs >3mm and M5 needs >5mm to actually pass a screw through."""
-    assert get_mount("nema17").bolt_hole_dia_mm > 3.0
-    assert get_mount("nema23").bolt_hole_dia_mm > 5.0
+# ISO 273 clearance holes. A screw cannot physically pass through anything
+# smaller than the "close" figure, so these are hard minimums, not preferences.
+_ISO273_CLOSE_MM = {"M2.5": 2.7, "M3": 3.2, "M4": 4.3, "M5": 5.3}
+
+# What screw each mount is designed around.
+_MOUNT_SCREW = {
+    "nema17": "M3",
+    "nema23": "M5",
+    "bearing_608": "M3",
+    "raspberry_pi": "M2.5",
+    "vesa_75": "M4",
+}
+
+
+@pytest.mark.parametrize("mount_key, screw", sorted(_MOUNT_SCREW.items()))
+def test_bolt_holes_are_clearance_not_interference(mount_key, screw):
+    """Every mount, not just NEMA.
+
+    The original version of this test only checked nema17/nema23, which is why
+    bearing_608 kept a 3.0mm hole for an M3 screw long after the same mistake
+    had been found and fixed on the NEMA mounts. A bug class is only really
+    fixed once the test covers every case it could occur in.
+    """
+    hole = get_mount(mount_key).bolt_hole_dia_mm
+    minimum = _ISO273_CLOSE_MM[screw]
+    assert hole >= minimum, (
+        f"{mount_key}: {hole}mm hole is smaller than ISO 273 close clearance "
+        f"for {screw} ({minimum}mm) -- the screw would not pass through."
+    )
 
 
 def test_square_bolt_pattern_helper():
