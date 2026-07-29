@@ -17,7 +17,7 @@ from rich.panel import Panel
 from rich.prompt import FloatPrompt, IntPrompt, Prompt
 from rich.table import Table
 
-from . import generate, mechanics, verify, zoo_project
+from . import generate, kcl_inspect, mechanics, verify, zoo_project
 from .config import load_environment
 from .materials import MATERIALS, get_material
 from .mount_specs import EXTRUSION_SERIES, MOUNTS, get_mount
@@ -71,6 +71,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--print-prompt",
         action="store_true",
         help="Run the sizing calc, print the Agent API prompt, and stop. No network calls, no credits, no Zoo CLI needed -- paste the prompt into Design Studio yourself.",
+    )
+    p.add_argument(
+        "--literal-prompt",
+        action="store_true",
+        help="Ask for the part as fixed coordinates instead of named parameters and relationships. The result has the same dimensions but is not editable -- change one value in Design Studio and nothing else follows. Kept for comparison.",
     )
     p.add_argument(
         "--no-export",
@@ -183,6 +188,56 @@ def _prompt_for_missing(args: argparse.Namespace) -> None:
         )
     if args.load_n is None:
         args.load_n = FloatPrompt.ask("Expected load on the mount (N)", default=5.0)
+
+
+def print_parametric_report(kcl_code: str, scheme: generate.ParameterScheme) -> None:
+    """Report whether the returned model is actually editable.
+
+    Worth printing separately from the geometry checks because it can fail
+    while every dimension is still correct -- a model can be exactly right
+    and completely rigid, which is what the literal prompt produces."""
+    report = kcl_inspect.check_parametric(
+        kcl_code, scheme.names, scheme.relations
+    )
+    model = report.model
+
+    table = Table(title="Parametric model", show_header=True, box=None, padding=(0, 2, 0, 0))
+    table.add_column("Check")
+    table.add_column("Result")
+    table.add_column("Detail")
+
+    names_ok = not report.missing_names
+    table.add_row(
+        "Parameter names",
+        "[green]PASS[/green]" if names_ok else "[yellow]PARTIAL[/yellow]",
+        f"{len(report.found_names)}/{len(report.expected_names)} declared"
+        + ("" if names_ok else f"; missing: {', '.join(report.missing_names)}"),
+    )
+
+    rel_ok = not report.broken_relations
+    table.add_row(
+        "Relationships",
+        "[green]PASS[/green]" if rel_ok else "[yellow]PARTIAL[/yellow]",
+        f"{len(report.honoured_relations)}/{len(report.expected_relations)} derived as asked"
+        + ("" if rel_ok else f"; flattened to constants: {', '.join(report.broken_relations)}"),
+    )
+
+    table.add_row(
+        "Model",
+        "[dim]info[/dim]",
+        f"{len(model.parameters)} parameters, {len(model.derived)} derived "
+        f"({model.derived_ratio:.0%}), {model.constraint_count} constraints",
+    )
+    console.print()
+    console.print(table)
+
+    if report.honoured_relations:
+        console.print(
+            f"[dim]Editable in Design Studio: change "
+            f"{', '.join(sorted(scheme.relations))[:60]} and the dependent "
+            f"dimensions follow.[/dim]"
+        )
+    console.print()
 
 
 def print_spec_summary(mount, material, args, thickness: mechanics.ThicknessResult) -> None:
@@ -432,7 +487,13 @@ def main(argv: list[str] | None = None) -> int:
     console.print()
     print_spec_summary(mount, material, args, thickness)
 
-    prompt = generate.build_prompt(mount, material, thickness.required_thickness_mm)
+    scheme = None
+    if args.literal_prompt:
+        prompt = generate.build_prompt(mount, material, thickness.required_thickness_mm)
+    else:
+        prompt, scheme = generate.build_parametric_prompt(
+            mount, material, thickness.required_thickness_mm
+        )
 
     if args.print_prompt:
         # Everything above this line is local arithmetic -- no token, no
@@ -457,6 +518,10 @@ def main(argv: list[str] | None = None) -> int:
                 return _add_to_project(args, mount, material, thickness, kcl_code)
 
             kcl_path = generate.write_kcl_project(kcl_code, output_dir)
+
+            if scheme is not None:
+                spinner.stop()
+                print_parametric_report(kcl_code, scheme)
 
             if args.no_export:
                 spinner.stop()
