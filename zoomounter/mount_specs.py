@@ -18,6 +18,7 @@ hidden; flagged again in the README.
 """
 
 import math
+from dataclasses import replace
 from dataclasses import dataclass
 
 
@@ -301,19 +302,16 @@ def apply_host_mount(
             (-hx, hy, dia), (-hx, -hy, dia)
         ]
 
-    # Return a new MountSpec using object.__setattr__ to bypass frozen=True
-    new_spec = MountSpec(
+    # dataclasses.replace, NOT a hand-written MountSpec(...) call. The previous
+    # version listed every field to copy, and silently dropped the three load
+    # limit fields when they were added -- so any part with host-side features
+    # reported "no published limit on file" and lost its safety warning
+    # entirely. replace() carries every field forward by construction, so a
+    # future field cannot go missing the same way.
+    return replace(
+        base,
         name=f"{base.name} (with {host_mount})",
-        kind=base.kind,
         plate_width_mm=width,
-        plate_height_mm=base.plate_height_mm,
-        bolt_hole_dia_mm=base.bolt_hole_dia_mm,
-        hole_positions=base.hole_positions,
         host_holes=tuple(holes),
         host_slots=tuple(slots),
-        center_hole_dia_mm=base.center_hole_dia_mm,
-        typical_mass_kg=base.typical_mass_kg,
-        shaft_load_offset_mm=base.shaft_load_offset_mm,
-        body_cg_offset_mm=base.body_cg_offset_mm,
     )
-    return new_spec

@@ -8,6 +8,7 @@ Runs offline, no API calls, no credits.
 """
 
 import argparse
+import dataclasses
 from unittest import mock
 
 import pytest
@@ -18,6 +19,7 @@ from zoomounter.mechanics import COMPONENT_LOAD_LIMIT, required_thickness
 from zoomounter.mount_specs import (
     EXTRUSION_SERIES,
     MOUNTS,
+    MountSpec,
     apply_host_mount,
     get_mount,
 )
@@ -187,6 +189,42 @@ def test_slots_fit_inside_the_plate():
             assert abs(x) + width / 2 < spec.plate_width_mm / 2, (
                 f"{option}: slot at x={x} runs off the plate"
             )
+
+
+def test_host_mount_preserves_every_unrelated_field():
+    """apply_host_mount used to hand-copy a field list, and silently dropped
+    the load limits when they were added -- so any part with host features
+    reported "no published limit on file" and lost its safety warning.
+
+    Asserted field-by-field over dataclasses.fields rather than over the three
+    fields I happen to remember, so a field added tomorrow is covered too."""
+    base = get_mount("nema17")
+    modified = apply_host_mount(base, "2020-slots")
+    intentionally_changed = {"name", "plate_width_mm", "host_holes", "host_slots"}
+
+    for f in dataclasses.fields(MountSpec):
+        if f.name in intentionally_changed:
+            continue
+        assert getattr(modified, f.name) == getattr(base, f.name), (
+            f"apply_host_mount dropped or altered '{f.name}'"
+        )
+
+
+@pytest.mark.parametrize("option", ["2020-slots", "4040-slots", "corner-holes"])
+def test_host_mounted_parts_still_get_their_limit_checked(option):
+    """The user-visible half of the bug: the warning must survive the
+    host-mount transform, not degrade to 'not checked'."""
+    spec = apply_host_mount(get_mount("nema17"), option)
+    result = required_thickness(
+        load_n=120, mount=spec, material=ALUMINIUM,
+        load_type="radial", safety_factor=SF,
+    )
+    checks = [c for c in result.notes if c.code == COMPONENT_LOAD_LIMIT]
+    assert len(checks) == 1
+    assert checks[0].level == "LOUD WARN", (
+        f"{option}: 120N against a 28N limit must warn, got {checks[0].level}"
+    )
+    assert "28N" in checks[0].message
 
 
 def test_larger_series_uses_larger_fasteners():
