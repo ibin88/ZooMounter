@@ -148,6 +148,21 @@ def expected_holes(mount: MountSpec) -> list[tuple[float, float, float]]:
     holes = [(x, y, mount.bolt_hole_dia_mm) for x, y in mount.hole_positions]
     if mount.center_hole_dia_mm > 0:
         holes.append((0.0, 0.0, mount.center_hole_dia_mm))
+        
+    for x, y, dia in mount.host_holes:
+        holes.append((x, y, dia))
+        
+    for x, y, length, width, direction in mount.host_slots:
+        # A slot of length L and width W has semicircular ends.
+        # The centers of these semicircles are offset from the slot center.
+        offset = (length - width) / 2.0
+        if direction == 'y':
+            holes.append((x, y - offset, width))
+            holes.append((x, y + offset, width))
+        else:
+            holes.append((x - offset, y, width))
+            holes.append((x + offset, y, width))
+            
     return holes
 
 

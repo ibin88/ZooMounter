@@ -44,13 +44,24 @@ def build_prompt(mount: MountSpec, material: Material, thickness_mm: float) -> s
             f" It also has a {mount.center_hole_dia_mm}mm diameter through-hole centered on the plate."
         )
 
-    return (
+    prompt = (
         f"A flat rectangular mounting plate, {mount.plate_width_mm}mm wide (x-axis) x "
         f"{mount.plate_height_mm}mm tall (y-axis) x {round(thickness_mm, 2)}mm thick, centered at the "
         f"origin. It has {len(mount.hole_positions)} through-holes, each "
         f"{mount.bolt_hole_dia_mm}mm in diameter, centered at these (x, y) coordinates relative to the "
-        f"plate center: {hole_list}.{center_clause} All holes go through the full thickness of the plate."
+        f"plate center: {hole_list}.{center_clause}"
     )
+
+    if getattr(mount, 'host_holes', ()):
+        host_h_list = "; ".join(f"({x}mm, {y}mm) diameter {dia}mm" for x, y, dia in mount.host_holes)
+        prompt += f" It has {len(mount.host_holes)} additional mounting holes at: {host_h_list}."
+
+    if getattr(mount, 'host_slots', ()):
+        host_s_list = "; ".join(f"({x}mm, {y}mm) with length {l}mm along {dir_char}-axis and width {w}mm" for x, y, l, w, dir_char in mount.host_slots)
+        prompt += f" It also has {len(mount.host_slots)} adjustment slots centered at: {host_s_list}."
+
+    prompt += " All holes and slots go through the full thickness of the plate."
+    return prompt
 
 
 def _api_token() -> str:

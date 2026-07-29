@@ -21,12 +21,13 @@ dependencies = [
     "requests>=2.31",
     "python-dotenv>=1.0",
     "rich>=13.7",
+    "customtkinter>=5.2",
+    "pillow>=10.0",
 ]
 
 [project.optional-dependencies]
-gui = ["customtkinter>=5.2", "pillow>=10.0"]
 mcp = ["mcp[cli]>=1.2"]
-all = ["customtkinter>=5.2", "pillow>=10.0", "mcp[cli]>=1.2"]
+all = ["mcp[cli]>=1.2"]
 dev = ["pytest>=8.0"]
 
 [project.scripts]

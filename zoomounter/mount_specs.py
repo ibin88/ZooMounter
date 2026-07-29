@@ -66,11 +66,12 @@ class MountSpec:
     plate_height_mm: float  # Y extent
     bolt_hole_dia_mm: float  # uniform diameter for all mounting holes
     hole_positions: tuple[tuple[float, float], ...]  # (x, y) offsets from plate center
+    host_holes: tuple[tuple[float, float, float], ...] = ()  # (x, y, dia)
+    host_slots: tuple[tuple[float, float, float, float, str], ...] = ()  # (x, y, length, width, direction='x' or 'y')
     center_hole_dia_mm: float = 0  # shaft/bore/press-fit clearance; 0 if none
     typical_mass_kg: float = 0  # approximate mass of the component itself (motor, etc); 0 if negligible/not applicable
-    typical_body_length_mm: float = 0  # approximate distance from mount face to where an external side load
-    # (belt, pulley, gear) would typically apply -- used as the default lever arm for radial-load mounts
-    # instead of an arbitrary half-plate-width guess. 0 means "use half plate width" (no better default known).
+    shaft_load_offset_mm: float = 15.0  # distance from mount face to where external side load acts (forward)
+    body_cg_offset_mm: float = 0  # distance from mount face to component CG (backward). 0 if negligible.
 
     def estimate_volume_mm3(self, thickness_mm: float) -> float:
         """Solid plate volume minus all holes -- used to sanity-check the
@@ -79,7 +80,9 @@ class MountSpec:
         plate_area = self.plate_width_mm * self.plate_height_mm
         center_area = math.pi * (self.center_hole_dia_mm / 2) ** 2
         bolt_hole_area = len(self.hole_positions) * math.pi * (self.bolt_hole_dia_mm / 2) ** 2
-        net_area = plate_area - center_area - bolt_hole_area
+        host_hole_area = sum(math.pi * (dia / 2) ** 2 for _, _, dia in self.host_holes)
+        host_slot_area = sum(length * width for _, _, length, width, _ in self.host_slots) # rough rect area
+        net_area = plate_area - center_area - bolt_hole_area - host_hole_area - host_slot_area
         return net_area * thickness_mm
 
 
@@ -97,7 +100,8 @@ MOUNTS: dict[str, MountSpec] = {
         hole_positions=square_bolt_pattern(31.0),
         center_hole_dia_mm=22.0,
         typical_mass_kg=0.28,  # representative mid-length NEMA17 (~40mm body); varies ~0.2-0.4kg by length
-        typical_body_length_mm=40.0,
+        shaft_load_offset_mm=15.0,
+        body_cg_offset_mm=20.0,
     ),
     "nema23": MountSpec(
         name="NEMA 23 stepper motor mount",
@@ -108,7 +112,8 @@ MOUNTS: dict[str, MountSpec] = {
         hole_positions=square_bolt_pattern(47.14),  # 47.14mm square spacing, not a bolt circle
         center_hole_dia_mm=38.1,
         typical_mass_kg=0.7,  # representative mid-length NEMA23 (~56mm body); varies ~0.5-1.0kg by length
-        typical_body_length_mm=56.0,
+        shaft_load_offset_mm=15.0,
+        body_cg_offset_mm=28.0,
     ),
     "bearing_608": MountSpec(
         name="608 bearing (skate bearing) pillow mount",
@@ -185,3 +190,66 @@ def get_mount(
         raise ValueError(
             f"Unknown mount '{name}'. Choose from {list(MOUNTS)} or use 'custom'."
         ) from e
+
+
+def apply_host_mount(
+    base: MountSpec,
+    host_mount: str,
+    host_slot_direction: str = "parallel",
+    plate_width_override: float | None = None
+) -> MountSpec:
+    """Return a new MountSpec modified with host-side mounting features."""
+    if host_mount == "none":
+        return base
+        
+    width = plate_width_override or base.plate_width_mm
+    slots = []
+    holes = []
+
+    if host_mount in ("2020-slots", "4040-slots"):
+        # Auto-calculate wing spacing (round up to nearest 20mm multiple)
+        spacing = math.ceil((base.plate_width_mm + 15) / 20) * 20
+        
+        # If user didn't override, set width to encompass the slots with 10mm margins
+        if not plate_width_override:
+            width = spacing + 20
+            
+        slot_len = 15.0
+        slot_wid = 5.5  # M5 clearance
+        
+        dir_char = "y" if host_slot_direction in ("parallel", "y") else "x"
+        slots = [
+            (-spacing/2, 0, slot_len, slot_wid, dir_char),
+            (spacing/2, 0, slot_len, slot_wid, dir_char)
+        ]
+        
+    elif host_mount == "corner-holes":
+        # 10mm inset from corners
+        inset = 10
+        if not plate_width_override:
+            width = base.plate_width_mm + 30 # arbitrary expansion
+        
+        h = base.plate_height_mm
+        hx, hy = width/2 - inset, h/2 - inset
+        dia = 5.5
+        holes = [
+            (hx, hy, dia), (hx, -hy, dia),
+            (-hx, hy, dia), (-hx, -hy, dia)
+        ]
+
+    # Return a new MountSpec using object.__setattr__ to bypass frozen=True
+    new_spec = MountSpec(
+        name=f"{base.name} (with {host_mount})",
+        kind=base.kind,
+        plate_width_mm=width,
+        plate_height_mm=base.plate_height_mm,
+        bolt_hole_dia_mm=base.bolt_hole_dia_mm,
+        hole_positions=base.hole_positions,
+        host_holes=tuple(holes),
+        host_slots=tuple(slots),
+        center_hole_dia_mm=base.center_hole_dia_mm,
+        typical_mass_kg=base.typical_mass_kg,
+        shaft_load_offset_mm=base.shaft_load_offset_mm,
+        body_cg_offset_mm=base.body_cg_offset_mm,
+    )
+    return new_spec

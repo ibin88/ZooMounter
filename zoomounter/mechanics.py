@@ -84,6 +84,22 @@ _TENSILE_STRESS_AREA_MM2 = {
 
 
 @dataclass
+class Check:
+    level: str  # "PASS", "WARN", "LOUD WARN"
+    message: str
+    source: str = ""
+    remedy: str = ""
+
+    def __str__(self):
+        s = f"[{self.level}] {self.message}"
+        if self.source:
+            s += f" (Source: {self.source})"
+        if self.remedy:
+            s += f" -> Remedy: {self.remedy}"
+        return s
+
+
+@dataclass
 class ThicknessResult:
     load_type: str
     self_weight_n: float
@@ -96,7 +112,7 @@ class ThicknessResult:
     min_wall_mm: float
     required_thickness_mm: float
     governing_limit: str  # which of the above actually decided the answer
-    notes: list[str] = field(default_factory=list)  # caveats worth surfacing to the user
+    notes: list[Check] = field(default_factory=list)  # caveats worth surfacing to the user
 
 
 def _nominal_screw_dia(hole_dia_mm: float) -> float:
@@ -131,7 +147,7 @@ def required_thickness(
 
     allowable_stress_mpa = material.yield_mpa / safety_factor
     min_wall = MIN_WALL_MM[material.process]
-    notes: list[str] = []
+    notes: list[Check] = []
 
     if load_type == "axial":
         self_weight_n = 0.0  # gravity acts perpendicular to an axial thrust, not with it
@@ -152,39 +168,61 @@ def required_thickness(
             mount.bolt_hole_dia_mm, bolt_count, safety_factor
         )
         notes.append(
-            f"Plate thickness is sized against screw-head pull-through (punching shear "
-            f"on a ~{head_dia:.1f}mm head), which calls for {t_stress:.2f}mm here."
+            Check(
+                level="INFO",
+                message=f"Plate thickness is sized against screw-head pull-through (punching shear on a ~{head_dia:.1f}mm head), which calls for {t_stress:.2f}mm here."
+            )
         )
         if effective_load_n > fastener_capacity:
             notes.append(
-                f"WARNING: {effective_load_n:.0f}N exceeds the estimated capacity of "
-                f"{bolt_count}x M{screw_dia:g} class-8.8 screws in tension "
-                f"({fastener_capacity:.0f}N at SF {safety_factor}). The fasteners, not the "
-                f"plate, are your limiting element -- size them up or add bolts."
+                Check(
+                    level="LOUD WARN",
+                    message=f"{effective_load_n:.0f}N exceeds the estimated capacity of {bolt_count}x M{screw_dia:g} class-8.8 screws in tension ({fastener_capacity:.0f}N at SF {safety_factor}).",
+                    remedy="The fasteners, not the plate, are your limiting element -- size them up or add bolts."
+                )
             )
         else:
             notes.append(
-                f"{bolt_count}x M{screw_dia:g} class-8.8 screws carry an estimated "
-                f"{fastener_capacity:.0f}N in tension at SF {safety_factor}, well above this load."
+                Check(
+                    level="PASS",
+                    message=f"{bolt_count}x M{screw_dia:g} class-8.8 screws carry an estimated {fastener_capacity:.0f}N in tension at SF {safety_factor}, well above this load."
+                )
             )
         notes.append(
-            "NOT CHECKED for axial loads: thread engagement depth in the motor's tapped "
-            "holes, and the motor's own axial bearing rating. For thrust applications one "
-            "of those is usually the real limit -- a thin result here means the plate is "
-            "not your constraint, not that the assembly is safe."
+            Check(
+                level="WARN",
+                message="NOT CHECKED for axial loads: thread engagement depth in the motor's tapped holes, and the motor's own axial bearing rating.",
+                remedy="For thrust applications one of those is usually the real limit -- a thin result here means the plate is not your constraint, not that the assembly is safe."
+            )
         )
+        
+        if mount.kind == "motor" and load_n > 67:
+            notes.append(
+                Check(
+                    level="LOUD WARN",
+                    message=f"Axial load ({load_n:.0f}N) exceeds the published limit for typical NEMA motors (NEMA 23 limit is ~67 N / 15 lb). Steppers have no thrust bearings.",
+                    source="docs/mechanics.html",
+                    remedy="Add a thrust bearing so the load bypasses the motor (screw -> bearing -> housing -> frame), and use a flexible coupling that tolerates float."
+                )
+            )
     else:
         self_weight_n = mount.typical_mass_kg * GRAVITY_M_S2
         effective_load_n = load_n + self_weight_n
 
         if lever_arm_mm is not None:
             arm = lever_arm_mm
-        elif mount.typical_body_length_mm > 0:
-            arm = mount.typical_body_length_mm
+        elif getattr(mount, 'shaft_load_offset_mm', 0) > 0:
+            arm = mount.shaft_load_offset_mm
         else:
             arm = mount.plate_width_mm / 2
 
-        moment_n_mm = effective_load_n * arm
+        cg_arm = getattr(mount, 'body_cg_offset_mm', 0)
+        
+        # Worst-case moment magnitude: external load and component weight moment add together
+        moment_n_mm = (load_n * arm) + (self_weight_n * cg_arm)
+        
+        # For deflection calc, keep the simple cubic formula by finding an effective load at the shaft end
+        effective_load_n = moment_n_mm / arm if arm > 0 else load_n + self_weight_n
 
         # Rectangular section, stress-limited: sigma = 6M / (w*t^2)
         t_stress = (6 * moment_n_mm / (mount.plate_width_mm * allowable_stress_mpa)) ** 0.5
@@ -200,8 +238,10 @@ def required_thickness(
 
         if self_weight_n > 0:
             notes.append(
-                f"Includes {self_weight_n:.2f}N of component self-weight (worst case: shaft "
-                f"mounted horizontal, so gravity acts as a side load too)."
+                Check(
+                    level="INFO",
+                    message=f"Includes {self_weight_n:.2f}N of component self-weight (worst case: shaft mounted horizontal, so gravity acts as a side load too)."
+                )
             )
 
     candidates = {
@@ -214,9 +254,10 @@ def required_thickness(
 
     if governing_limit.startswith("process minimum"):
         notes.append(
-            "The engineering calcs came out below the minimum manufacturable wall "
-            "thickness, so the process floor sets the answer -- this part is not "
-            "structurally limited at this load."
+            Check(
+                level="INFO",
+                message="The engineering calcs came out below the minimum manufacturable wall thickness, so the process floor sets the answer -- this part is not structurally limited at this load."
+            )
         )
 
     return ThicknessResult(

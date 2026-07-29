@@ -228,7 +228,10 @@ def test_self_weight_included_for_radial_motor_mounts():
     mount, material = get_mount("nema17"), get_material("aluminum_6061")
     result = required_thickness(10, mount, material, 2.0, load_type="radial")
     assert result.self_weight_n > 0
-    assert result.effective_load_n == pytest.approx(10 + result.self_weight_n)
+    # ensure self_weight moment is included
+    cg_arm = getattr(mount, 'body_cg_offset_mm', 0)
+    expected_moment = 10 * result.lever_arm_mm + result.self_weight_n * cg_arm
+    assert result.moment_n_mm == pytest.approx(expected_moment)
 
 
 def test_axial_self_weight_not_added():
@@ -245,13 +248,13 @@ def test_axial_warns_when_fasteners_are_the_real_limit():
     quietly returning a thin plate that reads as an all-clear."""
     mount, material = get_mount("nema17"), get_material("aluminum_6061")
     result = required_thickness(20000, mount, material, 2.0, load_type="axial")
-    assert any(n.startswith("WARNING") for n in result.notes)
+    assert any(n.level in ("WARN", "LOUD WARN") for n in result.notes)
 
 
 def test_axial_always_flags_what_it_does_not_check():
     mount, material = get_mount("nema17"), get_material("aluminum_6061")
     result = required_thickness(100, mount, material, 2.0, load_type="axial")
-    assert any("NOT CHECKED" in n for n in result.notes)
+    assert any("NOT CHECKED" in str(n) for n in result.notes)
 
 
 def test_governing_limit_is_reported_honestly():

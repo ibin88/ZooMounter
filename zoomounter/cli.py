@@ -62,6 +62,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Where to write the generated files (default: a uniquely-named folder under ./output, e.g. output/nema17_aluminum_6061_20260724_143022)",
     )
+
+    host_mount = p.add_argument_group("Host-side mounting options (Tier 1)")
+    host_mount.add_argument("--host-mount", choices=["none", "2020-slots", "4040-slots", "corner-holes"], default=None, help="Add host mounting features")
+    host_mount.add_argument("--host-slot-dir", choices=["parallel", "perpendicular"], default="parallel", help="Orientation of adjustment slots (default: parallel to Y)")
+    host_mount.add_argument("--plate-width", type=float, default=None, help="Override auto-calculated overall plate width")
     p.add_argument(
         "--print-prompt",
         action="store_true",
@@ -109,6 +114,7 @@ def apply_defaults_noninteractive(args: argparse.Namespace) -> None:
     args.load_type = args.load_type or "radial"
     if args.load_n is None:
         args.load_n = 5.0
+    args.host_mount = args.host_mount or "none"
 
 
 def fill_in_interactively(args: argparse.Namespace) -> None:
@@ -139,6 +145,21 @@ def _prompt_for_missing(args: argparse.Namespace) -> None:
         args.bolt_count = args.bolt_count or IntPrompt.ask("Bolt count", default=4)
         args.bolt_circle_dia_mm = args.bolt_circle_dia_mm or FloatPrompt.ask("Bolt circle diameter (mm)")
         args.bolt_hole_dia_mm = args.bolt_hole_dia_mm or FloatPrompt.ask("Bolt hole diameter (mm)")
+
+    if args.host_mount is None:
+        console.print("[dim]Host mount options: none, 2020-slots, 4040-slots, corner-holes[/dim]")
+        args.host_mount = Prompt.ask("Host mounting features", default="none")
+        if args.host_mount in ("2020-slots", "4040-slots"):
+            args.host_slot_dir = Prompt.ask("Slot direction", choices=["parallel", "perpendicular"], default="parallel")
+            auto_w = "Auto-calculated"
+            override = Prompt.ask("Plate width override (mm) [leave blank to auto-size based on motor]", default="")
+            if override:
+                try:
+                    args.plate_width = float(override)
+                except ValueError:
+                    args.plate_width = None
+            else:
+                args.plate_width = None
         if args.center_hole_dia_mm is None:
             args.center_hole_dia_mm = FloatPrompt.ask("Center hole diameter (mm, 0 for none)", default=0)
 
@@ -179,7 +200,14 @@ def print_spec_summary(mount, material, args, thickness: mechanics.ThicknessResu
     )
     console.print(table)
     for note in thickness.notes:
-        style = "yellow" if note.startswith("WARNING") else "dim"
+        if note.level == "LOUD WARN":
+            style = "bold red"
+        elif note.level == "WARN":
+            style = "yellow"
+        elif note.level == "PASS":
+            style = "green"
+        else:
+            style = "dim"
         console.print(f"  [{style}]- {note}[/{style}]")
 
 
@@ -221,11 +249,19 @@ def write_report(
         if thickness.self_weight_n > 0
         else ""
     )
-    notes_block = (
-        "\n### Engineering notes\n" + "\n".join(f"- {n}" for n in thickness.notes) + "\n"
-        if thickness.notes
-        else ""
-    )
+    notes_block = ""
+    if thickness.notes:
+        notes_block = "\n### Engineering notes\n"
+        for n in thickness.notes:
+            if n.level in ("WARN", "LOUD WARN"):
+                notes_block += f"- **[{n.level}]** {n.message}\n"
+                if n.source:
+                    notes_block += f"  - *Source*: {n.source}\n"
+                if n.remedy:
+                    notes_block += f"  - *Remedy*: {n.remedy}\n"
+            else:
+                notes_block += f"- {n.message}\n"
+        notes_block += "\n"
 
     check_rows = "\n".join(
         f"| {c.name} | {'PASS' if c.passed else 'FAIL'} | {c.detail} |" for c in result.checks
@@ -317,7 +353,14 @@ def _add_to_project(args, mount, material, thickness, kcl_code: str) -> int:
         )
     console.print(f"  [dim]{comment}[/dim]")
     for note in thickness.notes:
-        style = "yellow" if note.startswith("WARNING") else "dim"
+        if note.level == "LOUD WARN":
+            style = "bold red"
+        elif note.level == "WARN":
+            style = "yellow"
+        elif note.level == "PASS":
+            style = "green"
+        else:
+            style = "dim"
         console.print(f"  [{style}]- {note}[/{style}]")
     console.print(
         f"\n[dim]Reload the project in Design Studio to see it, or:[/dim] zoo app {project.root}"
@@ -355,6 +398,14 @@ def main(argv: list[str] | None = None) -> int:
             bolt_circle_dia_mm=args.bolt_circle_dia_mm,
             bolt_hole_dia_mm=args.bolt_hole_dia_mm,
             center_hole_dia_mm=args.center_hole_dia_mm or 0,
+        )
+        
+        from .mount_specs import apply_host_mount
+        mount = apply_host_mount(
+            mount,
+            host_mount=args.host_mount,
+            host_slot_direction=args.host_slot_dir,
+            plate_width_override=args.plate_width
         )
         material = get_material(
             args.material,
