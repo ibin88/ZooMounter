@@ -20,7 +20,7 @@ from rich.table import Table
 from . import generate, mechanics, verify, zoo_project
 from .config import load_environment
 from .materials import MATERIALS, get_material
-from .mount_specs import MOUNTS, get_mount
+from .mount_specs import EXTRUSION_SERIES, MOUNTS, get_mount
 from .verify import POSITION_TOLERANCE_MM
 
 console = Console()
@@ -64,7 +64,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     host_mount = p.add_argument_group("Host-side mounting options (Tier 1)")
-    host_mount.add_argument("--host-mount", choices=["none", "2020-slots", "4040-slots", "corner-holes"], default=None, help="Add host mounting features")
+    host_mount.add_argument("--host-mount", choices=["none", *EXTRUSION_SERIES, "corner-holes"], default=None, help="Add host mounting features")
     host_mount.add_argument("--host-slot-dir", choices=["parallel", "perpendicular"], default="parallel", help="Orientation of adjustment slots (default: parallel to Y)")
     host_mount.add_argument("--plate-width", type=float, default=None, help="Override auto-calculated overall plate width")
     p.add_argument(
@@ -149,9 +149,8 @@ def _prompt_for_missing(args: argparse.Namespace) -> None:
     if args.host_mount is None:
         console.print("[dim]Host mount options: none, 2020-slots, 4040-slots, corner-holes[/dim]")
         args.host_mount = Prompt.ask("Host mounting features", default="none")
-        if args.host_mount in ("2020-slots", "4040-slots"):
+        if args.host_mount in EXTRUSION_SERIES:
             args.host_slot_dir = Prompt.ask("Slot direction", choices=["parallel", "perpendicular"], default="parallel")
-            auto_w = "Auto-calculated"
             override = Prompt.ask("Plate width override (mm) [leave blank to auto-size based on motor]", default="")
             if override:
                 try:
@@ -160,8 +159,12 @@ def _prompt_for_missing(args: argparse.Namespace) -> None:
                     args.plate_width = None
             else:
                 args.plate_width = None
-        if args.center_hole_dia_mm is None:
-            args.center_hole_dia_mm = FloatPrompt.ask("Center hole diameter (mm, 0 for none)", default=0)
+
+    # Deliberately OUTSIDE the host-mount block. Nested one level deeper, this
+    # prompt was skipped whenever --host-mount was passed on the command line,
+    # silently leaving the centre hole at 0.
+    if args.center_hole_dia_mm is None:
+        args.center_hole_dia_mm = FloatPrompt.ask("Center hole diameter (mm, 0 for none)", default=0)
 
     if not args.material:
         console.print(f"[dim]Materials: {', '.join(MATERIALS.keys())}, or 'custom'[/dim]")

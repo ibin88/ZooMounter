@@ -85,10 +85,11 @@ _TENSILE_STRESS_AREA_MM2 = {
 
 @dataclass
 class Check:
-    level: str  # "PASS", "WARN", "LOUD WARN"
+    level: str  # "PASS", "INFO", "WARN", "LOUD WARN"
     message: str
     source: str = ""
     remedy: str = ""
+    code: str = ""  # stable identifier; prefer this over matching on message text
 
     def __str__(self):
         s = f"[{self.level}] {self.message}"
@@ -128,6 +129,73 @@ def _fastener_capacity_n(hole_dia_mm: float, bolt_count: int, safety_factor: flo
     area = _TENSILE_STRESS_AREA_MM2[screw_dia]
     per_screw = area * FASTENER_PROOF_STRESS_MPA / safety_factor
     return per_screw * bolt_count, screw_dia
+
+
+# Stable code for the check that compares an applied load against the
+# component's own published shaft rating.
+COMPONENT_LOAD_LIMIT = "component_load_limit"
+
+_LOAD_LIMIT_REMEDY = {
+    "axial": (
+        "Add a thrust bearing so the load bypasses the motor "
+        "(screw -> bearing -> housing -> frame), and use a flexible coupling "
+        "that tolerates float."
+    ),
+    "radial": (
+        "Support the shaft in its own bearing block and drive through a "
+        "coupling, so the side load reacts into the frame rather than the "
+        "motor's front bearing."
+    ),
+}
+
+
+def _component_load_check(mount: MountSpec, load_n: float, direction: str) -> Check:
+    """Compare the applied load against the COMPONENT's own published shaft
+    limit, which is independent of how thick we make the plate.
+
+    The limit is read off the MountSpec rather than being a module constant:
+    the figure differs per frame size, and a shared constant applied across
+    every motor is what made the earlier 67N check wrong for NEMA 17."""
+    limit = mount.max_axial_n if direction == "axial" else mount.max_radial_n
+
+    if limit is None:
+        return Check(
+            level="WARN",
+            message=(
+                f"No published {direction} shaft-load limit is on file for "
+                f"{mount.name}, so this load has NOT been checked against the "
+                f"component itself -- only against the plate."
+            ),
+            remedy=(
+                f"Look up the {direction} load rating in your part's datasheet "
+                f"and confirm {load_n:.0f}N is within it."
+            ),
+            code=COMPONENT_LOAD_LIMIT,
+        )
+
+    if load_n > limit:
+        return Check(
+            level="LOUD WARN",
+            message=(
+                f"{direction.capitalize()} load {load_n:.0f}N exceeds the published "
+                f"{direction} limit of {limit:.0f}N for {mount.name} "
+                f"({load_n / limit:.1f}x over). No plate thickness fixes this -- "
+                f"the limit is the component's own bearings, not the bracket."
+            ),
+            source=mount.load_limit_source,
+            remedy=_LOAD_LIMIT_REMEDY[direction],
+            code=COMPONENT_LOAD_LIMIT,
+        )
+
+    return Check(
+        level="PASS",
+        message=(
+            f"{direction.capitalize()} load {load_n:.0f}N is within the published "
+            f"{direction} limit of {limit:.0f}N for {mount.name}."
+        ),
+        source=mount.load_limit_source,
+        code=COMPONENT_LOAD_LIMIT,
+    )
 
 
 def required_thickness(
@@ -196,15 +264,7 @@ def required_thickness(
             )
         )
         
-        if mount.kind == "motor" and load_n > 67:
-            notes.append(
-                Check(
-                    level="LOUD WARN",
-                    message=f"Axial load ({load_n:.0f}N) exceeds the published limit for typical NEMA motors (NEMA 23 limit is ~67 N / 15 lb). Steppers have no thrust bearings.",
-                    source="docs/mechanics.html",
-                    remedy="Add a thrust bearing so the load bypasses the motor (screw -> bearing -> housing -> frame), and use a flexible coupling that tolerates float."
-                )
-            )
+        notes.append(_component_load_check(mount, load_n, "axial"))
     else:
         self_weight_n = mount.typical_mass_kg * GRAVITY_M_S2
         effective_load_n = load_n + self_weight_n
@@ -243,6 +303,8 @@ def required_thickness(
                     message=f"Includes {self_weight_n:.2f}N of component self-weight (worst case: shaft mounted horizontal, so gravity acts as a side load too)."
                 )
             )
+
+        notes.append(_component_load_check(mount, load_n, "radial"))
 
     candidates = {
         "bending stress" if load_type == "radial" else "screw-head pull-through": t_stress,

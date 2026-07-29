@@ -73,6 +73,18 @@ class MountSpec:
     shaft_load_offset_mm: float = 15.0  # distance from mount face to where external side load acts (forward)
     body_cg_offset_mm: float = 0  # distance from mount face to component CG (backward). 0 if negligible.
 
+    # Published shaft load limits for the COMPONENT itself, not the plate. These
+    # bound what the motor/bearing can survive regardless of how thick we make
+    # the bracket. None means "no published figure known" -- which must read as
+    # unknown, never as unlimited.
+    #
+    # These are per-mount and NOT interchangeable between frame sizes. A single
+    # limit applied across every motor is the same defect class as the NEMA
+    # bolt-pattern bug: one constant used where it does not belong.
+    max_axial_n: float | None = None
+    max_radial_n: float | None = None
+    load_limit_source: str = ""  # primary source for the two figures above
+
     def estimate_volume_mm3(self, thickness_mm: float) -> float:
         """Solid plate volume minus all holes -- used to sanity-check the
         Agent API's generated geometry against a hand calc before we ever
@@ -102,6 +114,11 @@ MOUNTS: dict[str, MountSpec] = {
         typical_mass_kg=0.28,  # representative mid-length NEMA17 (~40mm body); varies ~0.2-0.4kg by length
         shaft_load_offset_mm=15.0,
         body_cg_offset_mm=20.0,
+        max_axial_n=10.0,
+        max_radial_n=28.0,
+        load_limit_source=(
+            "ATO NEMA 17 (42mm) datasheet: Axial Max. Load 10N, Radial Max. Load 28N"
+        ),
     ),
     "nema23": MountSpec(
         name="NEMA 23 stepper motor mount",
@@ -114,6 +131,23 @@ MOUNTS: dict[str, MountSpec] = {
         typical_mass_kg=0.7,  # representative mid-length NEMA23 (~56mm body); varies ~0.5-1.0kg by length
         shaft_load_offset_mm=15.0,
         body_cg_offset_mm=28.0,
+        # CONTESTED FIGURE -- read this before changing it.
+        #
+        # Two reputable vendors publish the numeral "15" for NEMA 23 axial load
+        # in DIFFERENT UNITS, a 4.45x disagreement:
+        #   ATO NEMA 23 (56mm) datasheet ....... Axial Max. Load  15 N
+        #   Same Sky NEMA23-AMT112S datasheet .. max axial load   15 lb (66.7 N)
+        #
+        # We take the conservative 15 N. An earlier revision hardcoded 67 N for
+        # every motor, which is the Same Sky figure with the unit assumed --
+        # exactly how the NEMA bolt-pattern bug happened. If your motor's own
+        # datasheet says otherwise, that datasheet wins; override this field.
+        max_axial_n=15.0,
+        max_radial_n=75.0,
+        load_limit_source=(
+            "ATO NEMA 23 (56mm) datasheet: Axial Max. Load 15N, Radial Max. Load 75N "
+            "(conservative; Same Sky NEMA23-AMT112S publishes 15 lb = 66.7N axial)"
+        ),
     ),
     "bearing_608": MountSpec(
         name="608 bearing (skate bearing) pillow mount",
@@ -192,6 +226,30 @@ def get_mount(
         ) from e
 
 
+# T-slot extrusion families, keyed by the --host-mount option name.
+#
+# The two series differ in slot pitch AND fastener size. An earlier revision
+# rounded both to a 20mm pitch with M5 clearance, which made --host-mount
+# 4040-slots byte-identical to 2020-slots: the option parsed, generated, and
+# verified, while silently doing nothing.
+EXTRUSION_SERIES: dict[str, dict[str, float]] = {
+    "2020-slots": {
+        "pitch_mm": 20.0,        # 20-series profile, 20mm slot pitch
+        "bolt_clearance_mm": 5.5,  # M5 T-nut, ISO 273 normal clearance
+        "slot_length_mm": 15.0,
+        "edge_margin_mm": 10.0,
+        "clearance_mm": 15.0,    # gap past the motor body before the first slot
+    },
+    "4040-slots": {
+        "pitch_mm": 40.0,        # 40-series profile, 40mm slot pitch
+        "bolt_clearance_mm": 9.0,  # M8 T-nut, ISO 273 normal clearance
+        "slot_length_mm": 20.0,
+        "edge_margin_mm": 15.0,
+        "clearance_mm": 20.0,
+    },
+}
+
+
 def apply_host_mount(
     base: MountSpec,
     host_mount: str,
@@ -206,23 +264,29 @@ def apply_host_mount(
     slots = []
     holes = []
 
-    if host_mount in ("2020-slots", "4040-slots"):
-        # Auto-calculate wing spacing (round up to nearest 20mm multiple)
-        spacing = math.ceil((base.plate_width_mm + 15) / 20) * 20
-        
-        # If user didn't override, set width to encompass the slots with 10mm margins
+    if host_mount in EXTRUSION_SERIES:
+        series = EXTRUSION_SERIES[host_mount]
+        pitch = series["pitch_mm"]
+
+        # Wing spacing snaps to the extrusion's own slot pitch, so the bolts
+        # land in adjacent T-slots. 20-series and 40-series have DIFFERENT
+        # pitches -- rounding both to 20mm made 4040 a silent alias of 2020.
+        spacing = math.ceil((base.plate_width_mm + series["clearance_mm"]) / pitch) * pitch
+
+        # If the user didn't override, widen the plate to carry the slots with
+        # an edge margin scaled to the fastener size.
         if not plate_width_override:
-            width = spacing + 20
-            
-        slot_len = 15.0
-        slot_wid = 5.5  # M5 clearance
-        
+            width = spacing + 2 * series["edge_margin_mm"]
+
+        slot_len = series["slot_length_mm"]
+        slot_wid = series["bolt_clearance_mm"]
+
         dir_char = "y" if host_slot_direction in ("parallel", "y") else "x"
         slots = [
             (-spacing/2, 0, slot_len, slot_wid, dir_char),
             (spacing/2, 0, slot_len, slot_wid, dir_char)
         ]
-        
+
     elif host_mount == "corner-holes":
         # 10mm inset from corners
         inset = 10
