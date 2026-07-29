@@ -13,6 +13,14 @@ AGENTS.md
 project.toml
 thumbnail.png
 main.kcl
+
+# ...except under probes/results/, where the generated KCL *is* the evidence.
+# Section 8 of NOTES-FOR-ZOO.md is a claim about what the Agent API emits, so
+# the files backing that claim have to be in the repo.
+!probes/results/**/main.kcl
+
+# Raw run log is just the polling transcript; probe_results.json has the data.
+probes/probe_run.log
 .pytest_cache/
 .vscode/
 *.egg-info/

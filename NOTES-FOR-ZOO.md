@@ -180,5 +180,109 @@ Zoo usable as a *deterministic* geometry backend rather than a creative tool.
 
 ---
 
+## 8. The Agent API emits *parametric, constrained* KCL — and nothing says so
+
+This is the finding I'd most want fed back into the marketing copy, because I
+only discovered it by accident and it changes what the API is for.
+
+I had assumed text-to-CAD returned frozen geometry: literal coordinates baked
+into a sketch, fine for a one-off part and useless as a starting point. So I
+built ZooMounter to compute every dimension itself and treat the API as a
+dumb renderer.
+
+That's not what comes back. Asked for two obround slots, the API returned:
+
+```kcl
+slotLength = 20mm
+slotWidth = 6mm
+slotRadius = slotWidth / 2
+slotCenterSpacing = slotLength - slotWidth
+...
+leftArc = arc(start = [-32mm, 3mm], end = [-32mm, -3mm], center = [-32mm, 0mm])
+leftTopGuide = line(start = [-32mm, 0mm], end = [-32mm, 3mm], construction = true)
+...
+horizontalDistance([leftArc.center, rightArc.center]) == slotCenterSpacing
+radius(leftArc) == slotRadius
+```
+
+Three things there that I did not ask for and did not expect:
+
+1. **Named parameters**, not literals. Every dimension I stated became a
+   variable.
+2. **A derived relationship.** `slotCenterSpacing = slotLength - slotWidth` is
+   the actual geometry of an obround slot — the arc centres sit `(L-W)/2`
+   either side of centre. Nothing in my prompt said that. It was inferred.
+3. **Real sketch constraints plus construction guides**, so the profile stays
+   solvable when a parameter changes.
+
+Measured across all six probe files in `probes/results/`:
+
+| Probe | Lines | Named params | Constraints | Construction lines |
+|---|---|---|---|---|
+| holes | 74 | 7 | 9 | 0 |
+| slot | 179 | 8 | 41 | 8 |
+| counterbore | 76 | 8 | 10 | 0 |
+| pocket | 78 | 8 | 12 | 0 |
+| boss | 59 | 8 | 10 | 0 |
+| chamfer | 65 | 5 | 24 | 0 |
+
+Every generation, without exception. The output is an editable parametric
+model, not a mesh with extra steps.
+
+**Why it matters commercially:** "text to CAD" sets the expectation of a
+throwaway blob you inspect and discard. What you actually ship is a
+*constrained parametric model a human can keep working in* — which is the
+difference between a novelty and a starting point for real work. That is a
+much stronger claim and I saw it stated nowhere in the docs, the FAQ, or the
+v1 announcement.
+
+It also has a concrete architectural consequence I'd have designed around if
+I'd known: ZooMounter computes dimensions in Python and bakes numbers into
+the prompt. Knowing the output is parametric, the better design emits the
+*relationships* and lets the KCL carry them, so a downstream user can adjust
+`slotLength` in Design Studio and have the model stay correct. I'd have built
+it that way from the start.
+
+---
+
+## 9. What the Agent API can actually build (six features, all verified)
+
+There was no list I could find of which manufacturing features text-to-CAD
+handles, so I measured it. One feature per prompt, exact numbers stated, and
+every result checked by **parsing the returned STEP** — never by looking at a
+render and deciding it seemed right.
+
+| Feature | Result | How it was proven |
+|---|---|---|
+| Through holes (control) | supported | 4 circles at stated centres, Ø5.00 |
+| **Obround slot** | **supported** | 4 arc-ends at ±(L−W)/2, Ø6.00 |
+| Counterbore | supported | Concentric Ø5.00 and Ø10.00 at origin |
+| Blind pocket | supported | Volume 32,400mm³ vs 36,000 solid — **0.0% off** |
+| Raised boss | supported | Bounding box 11.00mm tall, Ø20.00 circle |
+| Chamfer on named edges | supported | Volume 18,900mm³ vs 21,600 unchamfered — **0.0% off** |
+
+Reproduce with `python probes/probe_features.py`.
+
+Two notes on method, both of which cost me something to learn:
+
+**Each check was proven able to fail before it was run.** Every checker was
+first fed a fabricated correct part *and* a part with the feature missing,
+and had to pass one and reject the other. The slot check, for instance,
+rejects a plain round hole sitting where the slot should be — otherwise
+"the API returned circles" would have read as success.
+
+**My first chamfer probe was worthless and I nearly shipped it.** I used a
+realistic 3mm chamfer, which removes 0.5% of the part volume — inside my 5%
+measurement tolerance. That check would have passed an unchamfered block.
+It's now 15mm, where present-versus-absent is 14% apart. Flagging it because
+if you build a conformance suite for this, feature-detection thresholds need
+to be derived from measurement resolution, not from what a real part looks
+like.
+
+The headline for your purposes: **slots, pockets, counterbores, bosses and
+chamfers all work**, and the volume-verified ones came back exact.
+
+---
+
 *Findings from building [ZooMounter](https://github.com/ibin88/ZooMounter) for
 the Zoo API Makeathon, July 2026. Happy to expand on any of these.*
