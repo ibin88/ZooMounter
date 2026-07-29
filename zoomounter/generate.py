@@ -132,7 +132,10 @@ def build_parameter_scheme(mount: MountSpec, thickness_mm: float) -> ParameterSc
     decl: list[tuple[str, str]] = []
     rel: dict[str, list[str]] = {}
 
-    decl.append(("plateThickness", f"{_fmt(thickness_mm)}mm"))
+    # 2dp to match build_prompt. The calc carries more precision than that,
+    # but stating 1.0499mm when the literal path states 1.05mm makes the two
+    # prompts describe different parts, and no process holds 0.1um anyway.
+    decl.append(("plateThickness", f"{round(thickness_mm, 2):g}mm"))
     decl.append(("plateHeight", f"{_fmt(mount.plate_height_mm)}mm"))
     decl.append(("boltHoleDia", f"{_fmt(mount.bolt_hole_dia_mm)}mm"))
 

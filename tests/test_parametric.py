@@ -133,6 +133,7 @@ def test_scheme_expressions_evaluate_to_the_literal_dimensions():
     assert env["plateWidth"] == pytest.approx(spec.plate_width_mm)
     assert env["plateThickness"] == pytest.approx(THICKNESS)
     assert env["plateHeight"] == pytest.approx(spec.plate_height_mm)
+    assert env["plateHeight"] == pytest.approx(spec.plate_height_mm)
     assert env["boltHoleOffset"] == pytest.approx(abs(spec.hole_positions[0][0]))
     assert env["slotCenterOffset"] == pytest.approx(abs(spec.host_slots[0][0]))
     assert env["centerHoleDia"] == pytest.approx(spec.center_hole_dia_mm)
@@ -172,6 +173,20 @@ def test_mount_without_slots_keeps_plate_width_literal():
     scheme = generate.build_parameter_scheme(get_mount("nema17"), THICKNESS)
     assert ("plateWidth", "42.3mm") in scheme.declarations
     assert "plateWidth" not in scheme.relations
+
+
+def test_thickness_is_stated_the_same_way_as_the_literal_prompt():
+    """Both prompts must describe the same part. The calc carries more
+    precision than 2dp, and stating 1.0499mm here while build_prompt states
+    1.05mm would make the two describe different plates."""
+    spec = _slotted_nema17()
+    thickness = 1.0499213
+    scheme = generate.build_parameter_scheme(spec, thickness)
+    literal = generate.build_prompt(spec, ALUMINIUM, thickness)
+
+    stated = dict(scheme.declarations)["plateThickness"]
+    assert stated == "1.05mm"
+    assert f"{round(thickness, 2)}mm thick" in literal
 
 
 def test_no_float_noise_reaches_the_prompt():
