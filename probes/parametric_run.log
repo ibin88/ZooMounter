@@ -1,0 +1,81 @@
+┌──────────────────────────────────────────────────┐
+│ ZooMounter                                       │
+│ A few questions to size and generate your mount. │
+└──────────────────────────────────────────────────┘
+
+                                    Spec                                    
+Mount                    NEMA 17 stepper motor mount (with 2020-slots)      
+Material                 Aluminum 6061-T6 (machined)                        
+Load type                radial                                             
+External load            20.0 N                                             
++ Component self-weight  2.75 N (0.28 kg) -> effective load 23.66 N         
+Safety factor            2.0                                                
+Calculated thickness     1.05 mm  (governed by deflection limit (arm/300))  
+  - [INFO] Includes 2.75N of component self-weight (worst case: shaft mounted 
+horizontal, so gravity acts as a side load too).
+  - [PASS] Radial load 20N is within the published radial limit of 28N for NEMA
+17 stepper motor mount (with 2020-slots). (Source: ATO NEMA 17 (42mm) 
+datasheet: Axial Max. Load 10N, Radial Max. Load 28N)
+
+Agent API prompt: Define these named parameters at the top of the file, using 
+exactly these names. Where an expression is given, write the expression -- do 
+not replace it with a pre-computed number:
+
+  plateThickness   = 1.0499mm
+  plateHeight      = 42.3mm
+  boltHoleDia      = 3.4mm
+  boltSpacing      = 31mm
+  boltHoleOffset   = boltSpacing / 2
+  centerHoleDia    = 22mm
+  slotSpacing      = 60mm
+  slotLength       = 15mm
+  slotWidth        = 5.5mm
+  edgeMargin       = 10mm
+  slotCenterOffset = slotSpacing / 2
+  plateWidth       = slotSpacing + 2 * edgeMargin
+
+Then build the part from those parameters, referring to them by name rather 
+than repeating their values:
+
+A flat rectangular mounting plate, plateWidth wide (x-axis) by plateHeight tall
+(y-axis) by plateThickness thick, centered at the origin.
+It has 4 through-holes of boltHoleDia diameter, centered at (-boltHoleOffset, 
+-boltHoleOffset), (boltHoleOffset, -boltHoleOffset), (boltHoleOffset, 
+boltHoleOffset) and (-boltHoleOffset, boltHoleOffset).
+It also has a through-hole of centerHoleDia diameter centered on the plate.
+It also has 2 adjustment slots cut through the full thickness, each slotLength 
+long along the y-axis and slotWidth wide with semicircular ends, centered at 
+(-slotCenterOffset, 0) and (slotCenterOffset, 0).
+All holes and slots go through the full thickness of the plate.
+
+Output folder: probes\parametric\2020-slots
+
+
+                            Parametric model                             
+Check            Result  Detail                                          
+Parameter names  PASS    12/12 declared                                  
+Relationships    PASS    3/3 derived as asked                            
+Model            info    12 parameters, 3 derived (25%), 32 constraints  
+Editable in Design Studio: change boltHoleOffset, plateWidth, slotCenterOffset 
+and the dependent dimensions follow.
+
+Generated: probes\parametric\2020-slots\export\output.step
+
+
+                                 Verification                                  
+┌────────────────┬────────┬───────────────────────────────────────────────────┐
+│ Check          │ Result │ Detail                                            │
+├────────────────┼────────┼───────────────────────────────────────────────────┤
+│ Hole positions │ PASS   │ all 9 holes present and within 0.5mm of spec      │
+│                │        │ (worst: 0.000mm)                                  │
+│ Bounding box   │ PASS   │ 80.00 x 42.30 x 1.05 mm vs specified 80.00 x      │
+│                │        │ 42.30 x 1.05 mm (worst axis: thickness, 0.0%)     │
+│ Volume         │ PASS   │ 2957.2 mm3 measured vs 2942.5 mm3 from the        │
+│                │        │ requested geometry (0.5%)                         │
+└────────────────┴────────┴───────────────────────────────────────────────────┘
+Mass of the generated part: 7.98 g (reported property, not an independent check
+-- it is volume x the density you supplied)
+┌──────┐
+│ PASS │
+└──────┘
+Report: probes\parametric\2020-slots\inspection_report.md

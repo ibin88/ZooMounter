@@ -37,6 +37,9 @@ _LITERAL_RE = re.compile(r"^-?\d+(?:\.\d+)?\s*[A-Za-z]*$")
 
 _IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
+_BLOCK_COMMENT_RE = re.compile(r"/\*.*?\*/", re.DOTALL)
+_LINE_COMMENT_RE = re.compile(r"//[^\n]*")
+
 # Function calls that build geometry rather than declare a value -- these are
 # assignments, but they are the model, not its parameters.
 _GEOMETRY_CALLS = {
@@ -108,8 +111,26 @@ def _first_call(expr: str) -> str | None:
     return m.group(1) if m else None
 
 
+def strip_comments(source: str) -> str:
+    """Remove /* */ and // comments, preserving line structure.
+
+    Not optional hygiene -- the Agent API echoes the submitted prompt into a
+    /* */ header at the top of every file it returns, and our prompt now
+    contains parameter declarations verbatim. Parsing the raw text would
+    count those echoed lines as real declarations and report a model as
+    parametric on the strength of its own prompt. The declarations happen to
+    be indented today, which is the only reason the naive parser was right.
+    """
+    def blank(m: re.Match) -> str:
+        return "".join("\n" for ch in m.group(0) if ch == "\n")
+
+    without_blocks = _BLOCK_COMMENT_RE.sub(blank, source)
+    return _LINE_COMMENT_RE.sub("", without_blocks)
+
+
 def inspect_kcl(source: str) -> KclModel:
     """Parse KCL source into the parameters it declares and how they relate."""
+    source = strip_comments(source)
     params: list[Parameter] = []
     declared: set[str] = set()
 
