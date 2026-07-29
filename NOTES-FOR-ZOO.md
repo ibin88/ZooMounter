@@ -236,12 +236,57 @@ difference between a novelty and a starting point for real work. That is a
 much stronger claim and I saw it stated nowhere in the docs, the FAQ, or the
 v1 announcement.
 
-It also has a concrete architectural consequence I'd have designed around if
-I'd known: ZooMounter computes dimensions in Python and bakes numbers into
-the prompt. Knowing the output is parametric, the better design emits the
-*relationships* and lets the KCL carry them, so a downstream user can adjust
-`slotLength` in Design Studio and have the model stay correct. I'd have built
-it that way from the start.
+### The part you can control, which I'd put in the docs
+
+Named parameters come back regardless. **Relationships only come back if you
+ask for them**, and that distinction decides whether the model is editable.
+
+ZooMounter originally computed every dimension in Python and stated the
+answers as fixed coordinates. The result looked parametric and wasn't:
+
+```
+plateWidth       = 80.0mm
+slotCenterOffset = 30.0mm
+```
+
+Ten well-named parameters, one derived value — and that one was
+`cutLength = plateThickness + 2.0mm`, an internal extrude detail. None of
+the design intent survived. Widen the slot spacing in Design Studio and the
+plate does not grow with it, because nothing recorded that the plate is
+sized *from* the slots.
+
+Rewriting the prompt to declare parameters and state derivations
+(`plateWidth = slotSpacing + 2 * edgeMargin`) rather than pre-computed
+numbers, then generating the identical part again:
+
+| | literal prompt | relationship prompt |
+|---|---|---|
+| Parameters | 10 | 12 |
+| Derived | 1 (10%) | **3 (25%)** |
+| Hole positions | 0.000mm | 0.000mm |
+| Bounding box | 0.0% | 0.0% |
+| Volume | 0.5% | 0.5% |
+
+**Identical geometry.** Editability cost nothing in accuracy — which was the
+thing genuinely in doubt, since this project's whole premise is that exact
+numbers produce exact parts, and relationships meant giving some of those
+numbers up. They didn't need to be given up: state the value *and* the
+derivation, and you get both.
+
+Both files are in `probes/` — `item5/2020-slots/main.kcl` is the before,
+`parametric/2020-slots/main.kcl` the after.
+
+Two things I'd suggest from this:
+
+1. **Say this in the docs.** "Ask in relationships, get a model that edits"
+   is a concrete, teachable prompting rule with a measurable outcome, and I
+   found it by accident after building the wrong architecture first.
+2. **One rough edge:** the submitted prompt is echoed into a `/* */` header
+   in every returned file. Once the prompt contains parameter declarations,
+   any tool parsing that KCL sees each declaration twice — once in the
+   comment, once in the code. Harmless if you strip comments, and a silent
+   double-count if you don't. Worth a note, or worth not echoing the prompt
+   verbatim.
 
 ---
 
