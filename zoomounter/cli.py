@@ -190,6 +190,27 @@ def _prompt_for_missing(args: argparse.Namespace) -> None:
         args.load_n = FloatPrompt.ask("Expected load on the mount (N)", default=5.0)
 
 
+def _render_preview(kcl_path: Path, output_dir: Path) -> Path | None:
+    """Render the generated part to a PNG next to the report.
+
+    A beginner cannot judge a mount they cannot see, and until now the only
+    way to look at one was to launch the GUI or open Design Studio. The
+    snapshot is of the real generated KCL, so it is evidence rather than an
+    illustration.
+
+    Never fatal: a missing or unauthenticated Zoo CLI costs you the picture,
+    not the part.
+    """
+    preview_path = output_dir / "preview.png"
+    try:
+        generate.snapshot_preview(kcl_path, preview_path)
+        console.print(f"[green]Preview:[/green] {preview_path}")
+        return preview_path
+    except Exception as e:
+        console.print(f"[dim]Preview render skipped: {e}[/dim]")
+        return None
+
+
 def print_parametric_report(kcl_code: str, scheme: generate.ParameterScheme) -> None:
     """Report whether the returned model is actually editable.
 
@@ -295,6 +316,7 @@ def write_report(
     safety_factor: float,
     thickness: mechanics.ThicknessResult,
     result: verify.VerificationResult,
+    preview_path: Path | None = None,
 ) -> None:
     status = "PASS" if result.passed else "FAIL"
     load_type_note = (
@@ -348,8 +370,18 @@ def write_report(
         else ""
     )
 
-    report = f"""# ZooMounter Inspection Report
+    preview_block = ""
+    if preview_path is not None and preview_path.exists():
+        # Relative so the report stays portable if the folder is moved or
+        # zipped -- the image sits alongside it.
+        preview_block = (
+            f"\n![Rendered part]({preview_path.name})\n\n"
+            "*Rendered from the generated KCL by `zoo kcl snapshot` -- this is "
+            "the actual part, not an illustration of it.*\n"
+        )
 
+    report = f"""# ZooMounter Inspection Report
+{preview_block}
 ## Request
 - Mount: {mount_name}
 - Material: {material_name}
@@ -523,6 +555,8 @@ def main(argv: list[str] | None = None) -> int:
                 spinner.stop()
                 print_parametric_report(kcl_code, scheme)
 
+            preview_path = _render_preview(kcl_path, output_dir)
+
             if args.no_export:
                 spinner.stop()
                 console.print(f"[green]Zoo project written:[/green] {kcl_path.parent}")
@@ -545,7 +579,10 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     report_path = output_dir / "inspection_report.md"
-    write_report(report_path, mount.name, material.name, args.load_n, args.safety_factor, thickness, result)
+    write_report(
+        report_path, mount.name, material.name, args.load_n,
+        args.safety_factor, thickness, result, preview_path=preview_path,
+    )
 
     console.print()
     print_results_table(result)

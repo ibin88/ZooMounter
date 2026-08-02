@@ -12,6 +12,7 @@ import pytest
 from zoomounter import generate
 from zoomounter.kcl_inspect import check_parametric, inspect_kcl
 from zoomounter.materials import get_material
+from zoomounter.mechanics import required_thickness
 from zoomounter.mount_specs import apply_host_mount, get_mount
 
 ALUMINIUM = get_material("aluminum_6061")
@@ -164,7 +165,6 @@ def test_scheme_expressions_evaluate_to_the_literal_dimensions():
     assert env["plateWidth"] == pytest.approx(spec.plate_width_mm)
     assert env["plateThickness"] == pytest.approx(THICKNESS)
     assert env["plateHeight"] == pytest.approx(spec.plate_height_mm)
-    assert env["plateHeight"] == pytest.approx(spec.plate_height_mm)
     assert env["boltHoleOffset"] == pytest.approx(abs(spec.hole_positions[0][0]))
     assert env["slotCenterOffset"] == pytest.approx(abs(spec.host_slots[0][0]))
     assert env["centerHoleDia"] == pytest.approx(spec.center_hole_dia_mm)
@@ -240,3 +240,48 @@ def test_every_builtin_mount_produces_a_usable_prompt():
             for pname, expr in scheme.declarations:
                 if not expr[0].isdigit() and not expr[0] == "-":
                     assert pname in scheme.relations
+
+
+# ---------------------------------------------------------------------------
+# Report preview embedding.
+# ---------------------------------------------------------------------------
+
+
+def _minimal_report(tmp_path, preview):
+    from zoomounter import cli, verify
+
+    thickness = required_thickness(
+        load_n=20, mount=get_mount("nema17"), material=ALUMINIUM,
+        load_type="radial", safety_factor=2.0,
+    )
+    # `passed` is a derived property over `checks`, not a field.
+    result = verify.VerificationResult(
+        checks=[verify.CheckResult(name="Bounding box", passed=True, detail="ok")]
+    )
+    path = tmp_path / "inspection_report.md"
+    cli.write_report(
+        path, "NEMA 17", "Aluminium", 20.0, 2.0, thickness, result,
+        preview_path=preview,
+    )
+    return path.read_text(encoding="utf-8")
+
+
+def test_report_embeds_the_preview_when_one_exists(tmp_path):
+    preview = tmp_path / "preview.png"
+    preview.write_bytes(b"\x89PNG\r\n\x1a\n")
+    body = _minimal_report(tmp_path, preview)
+    assert "![Rendered part](preview.png)" in body
+    # Relative, so the report survives the folder being moved or zipped.
+    assert str(tmp_path) not in body
+
+
+def test_report_omits_the_preview_when_render_failed(tmp_path):
+    """A missing Zoo CLI costs the picture, not the report."""
+    assert "![Rendered part]" not in _minimal_report(tmp_path, None)
+
+
+def test_report_omits_the_preview_when_the_file_is_absent(tmp_path):
+    """A path that was returned but never written must not become a broken
+    image link in the markdown."""
+    ghost = tmp_path / "never_written.png"
+    assert "![Rendered part]" not in _minimal_report(tmp_path, ghost)

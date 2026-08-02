@@ -215,118 +215,261 @@ class App(ctk.CTk):
             self.host_mount_frame.grid()
             self._draw_schematic()
 
+    # ---- 3D schematic -----------------------------------------------------
+    #
+    # Isometric rather than top-down, because plate thickness is the number
+    # this whole tool exists to compute and a plan view cannot show it.
+    #
+    # Geometry comes from _resolve_spec(), i.e. from apply_host_mount itself.
+    # The previous version re-derived the plate width inline with its own copy
+    # of the auto-sizing rule, which silently went stale when the extrusion
+    # series gained a real 40mm pitch -- it drew every 4040 mount as a 2020.
+
+    _ISO_COS30 = 0.8660254037844387
+    _ISO_SIN30 = 0.5
+
+    @staticmethod
+    def _iso(x: float, y: float, z: float) -> tuple[float, float]:
+        """Project model mm onto the canvas plane. +z is up the screen."""
+        return (
+            (x - y) * App._ISO_COS30,
+            (x + y) * App._ISO_SIN30 - z,
+        )
+
+    @staticmethod
+    def _circle_3d(cx, cy, r, z, segments=20):
+        import math
+        return [
+            (cx + r * math.cos(2 * math.pi * i / segments),
+             cy + r * math.sin(2 * math.pi * i / segments),
+             z)
+            for i in range(segments)
+        ]
+
+    @staticmethod
+    def _slot_3d(cx, cy, length, width, direction, z, segments=10):
+        """Obround outline: two semicircular caps offset +/-(L-W)/2 from
+        centre. Same construction verify.py expects in the STEP, so what is
+        drawn here is what gets checked later."""
+        import math
+        r = width / 2
+        d = max((length - width) / 2, 0.0)
+        pts = []
+        for i in range(segments + 1):  # cap at +d, sweeping -90 -> +90
+            a = -math.pi / 2 + math.pi * i / segments
+            pts.append((d + r * math.cos(a), r * math.sin(a)))
+        for i in range(segments + 1):  # cap at -d, sweeping +90 -> +270
+            a = math.pi / 2 + math.pi * i / segments
+            pts.append((-d + r * math.cos(a), r * math.sin(a)))
+        if direction == "y":
+            pts = [(-py, px) for px, py in pts]
+        return [(cx + px, cy + py, z) for px, py in pts]
+
     def _draw_schematic(self):
         c = self.schematic_canvas
-        c.delete("all")
         hm = self.host_mount_var.get()
         if hm == "none":
+            c.delete("all")
             return
 
-        import math
-        from .mount_specs import MOUNTS
-
-        c.update_idletasks()  # ensure winfo returns real size
-        w = c.winfo_width() or 400
-        h = c.winfo_height() or 180
-
-        # Reserve vertical space: 14px top labels, 22px bottom dim line+label
-        top_margin = 16
-        bottom_margin = 24
-        draw_h = h - top_margin - bottom_margin
-        mx = w / 2
-        my = top_margin + draw_h / 2  # vertical centre of drawing area
-
-        # Get the real motor width for the current mount
-        mount_key = self.mount_var.get()
-        motor_w_mm = MOUNTS[mount_key].plate_width_mm if mount_key in MOUNTS else 42.3
-
-        # Compute auto-calc plate width the same way apply_host_mount does
-        if hm in ("2020-slots", "4040-slots"):
-            spacing = math.ceil((motor_w_mm + 15) / 20) * 20
-            auto_pw_mm = spacing + 20
-        else:
-            auto_pw_mm = motor_w_mm + 30
-
-        # Check for override
-        override_str = self.plate_width_override_var.get().strip()
         try:
-            override_pw_mm = float(override_str) if override_str else None
-        except ValueError:
-            override_pw_mm = None
-
-        actual_pw_mm = override_pw_mm if override_pw_mm else auto_pw_mm
-
-        # Scale so the widest thing fits horizontally with margins
-        h_margin = 20
-        scale = (w - 2 * h_margin) / max(actual_pw_mm, auto_pw_mm, motor_w_mm + 40)
-
-        # Cap motor body height so it fits in draw_h with room to spare
-        mw = motor_w_mm * scale
-        mh = min(mw, draw_h - 10)  # motors are square, but cap to available height
-        pw = actual_pw_mm * scale
-        ph = mh + 12  # plate slightly taller
-
-        # --- Draw auto-calc outline if override differs ---
-        if override_pw_mm and override_pw_mm != auto_pw_mm:
-            auto_pw_px = auto_pw_mm * scale
-            c.create_rectangle(
-                mx - auto_pw_px / 2, my - ph / 2,
-                mx + auto_pw_px / 2, my + ph / 2,
-                fill="", outline="#555555", width=1, dash=(3, 5),
+            mount, _material, _load, _sf, thickness = self._resolve_spec()
+            base = get_mount(
+                self.mount_var.get(),
+                plate_width_mm=float(self.plate_width_var.get()) if self.plate_width_var.get() else None,
+                bolt_count=int(self.bolt_count_var.get()) if self.bolt_count_var.get() else None,
+                bolt_circle_dia_mm=float(self.bolt_circle_var.get()) if self.bolt_circle_var.get() else None,
+                bolt_hole_dia_mm=float(self.bolt_hole_var.get()) if self.bolt_hole_var.get() else None,
+                center_hole_dia_mm=float(self.center_hole_var.get() or 0),
             )
-            c.create_text(
-                mx, my - ph / 2 - 8,
-                text=f"auto: {auto_pw_mm:.0f}mm",
-                fill="#777777", font=("Arial", 8),
+        except Exception:
+            # A half-typed load or width is not an error worth rendering. Keep
+            # the last good frame instead of flashing a blank canvas on every
+            # keystroke.
+            return
+
+        c.delete("all")
+        c.update_idletasks()
+        cw = c.winfo_width() or 400
+        ch = c.winfo_height() or 180
+
+        W = mount.plate_width_mm
+        H = mount.plate_height_mm
+        T_real = thickness.required_thickness_mm
+
+        # A 1.05mm plate against an 80mm footprint is a hairline. Thicken it
+        # to stay visible, but say so -- an unlabelled exaggeration is how a
+        # drawing starts lying about the part.
+        T_min_visible = max(W, H) * 0.05
+        T = max(T_real, T_min_visible)
+        exaggerated = T > T_real + 1e-9
+
+        shapes: list[dict] = []
+        # (anchor_point_3d, text, colour, font, (dx_px, dy_px), anchor)
+        # The pixel offset is applied AFTER projection on purpose: nudging a
+        # label in model space gets sheared by the isometric transform, so
+        # "10mm below the edge" lands somewhere diagonal and on top of the
+        # geometry.
+        labels: list[tuple] = []
+
+        hw, hh = W / 2, H / 2
+
+        # Two side faces are visible in this projection: x=+W/2 and y=+H/2.
+        shapes.append({
+            "pts": [(hw, -hh, 0), (hw, hh, 0), (hw, hh, T), (hw, -hh, T)],
+            "fill": "#1d2320", "outline": "#2fa572", "width": 1,
+        })
+        shapes.append({
+            "pts": [(-hw, hh, 0), (hw, hh, 0), (hw, hh, T), (-hw, hh, T)],
+            "fill": "#232a26", "outline": "#2fa572", "width": 1,
+        })
+        # Top face last so its edges sit above the sides.
+        shapes.append({
+            "pts": [(-hw, -hh, T), (hw, -hh, T), (hw, hh, T), (-hw, hh, T)],
+            "fill": "#2d3733", "outline": "#2fa572", "width": 2,
+        })
+
+        # Auto-width ghost, when an override is in play.
+        try:
+            from .mount_specs import apply_host_mount
+            auto = apply_host_mount(
+                base,
+                host_mount=hm,
+                host_slot_direction=self.host_slot_dir_var.get(),
+                plate_width_override=None,
             )
+            if abs(auto.plate_width_mm - W) > 1e-6:
+                ahw = auto.plate_width_mm / 2
+                shapes.append({
+                    "pts": [(-ahw, -hh, T), (ahw, -hh, T), (ahw, hh, T), (-ahw, hh, T)],
+                    "fill": "", "outline": "#666666", "width": 1, "dash": (3, 5),
+                })
+                # (-W/2, +H/2) is the leftmost corner under isometric, so the
+                # label clears the motor body instead of sitting behind it.
+                labels.append((
+                    (-ahw, hh, T), f"auto: {auto.plate_width_mm:.0f}mm",
+                    "#888888", ("Arial", 8), (-6, -6), "e",
+                ))
+        except Exception:
+            pass
 
-        # --- Plate outline (actual) ---
-        c.create_rectangle(
-            mx - pw / 2, my - ph / 2,
-            mx + pw / 2, my + ph / 2,
-            fill="", outline="#2fa572", width=2, dash=(4, 4),
-        )
-
-        # --- Motor body ---
-        c.create_rectangle(
-            mx - mw / 2, my - mh / 2,
-            mx + mw / 2, my + mh / 2,
-            fill="#3b3b3b", outline="gray",
-        )
-        c.create_text(mx, my, text=f"Motor\n{motor_w_mm:.0f}mm", fill="white", font=("Arial", 9))
-
-        # --- Width dimension line below plate ---
-        dim_y = my + ph / 2 + 10
-        c.create_line(mx - pw / 2, dim_y, mx + pw / 2, dim_y, fill="#2fa572", width=1)
-        c.create_line(mx - pw / 2, dim_y - 4, mx - pw / 2, dim_y + 4, fill="#2fa572", width=1)
-        c.create_line(mx + pw / 2, dim_y - 4, mx + pw / 2, dim_y + 4, fill="#2fa572", width=1)
-        label = f"{actual_pw_mm:.0f}mm"
-        if override_pw_mm:
-            label += " (override)"
+        # Motor body, standing on the plate. NEMA frames are square, and
+        # apply_host_mount only widens X, so the body footprint is the
+        # unwidened mount.
+        body_len = base.body_cg_offset_mm * 2
+        if body_len > 0:
+            bw = base.plate_width_mm / 2
+            bh = base.plate_height_mm / 2
+            top = T + body_len
+            shapes.append({
+                "pts": [(bw, -bh, T), (bw, bh, T), (bw, bh, top), (bw, -bh, top)],
+                "fill": "#333333", "outline": "#777777", "width": 1,
+            })
+            shapes.append({
+                "pts": [(-bw, bh, T), (bw, bh, T), (bw, bh, top), (-bw, bh, top)],
+                "fill": "#3b3b3b", "outline": "#777777", "width": 1,
+            })
+            shapes.append({
+                "pts": [(-bw, -bh, top), (bw, -bh, top), (bw, bh, top), (-bw, bh, top)],
+                "fill": "#454545", "outline": "#888888", "width": 1,
+            })
+            labels.append((
+                (0, 0, top), f"Motor {base.plate_width_mm:.0f}mm",
+                "white", ("Arial", 9), (0, 0), "center",
+            ))
         else:
-            label += " (auto)"
-        c.create_text(mx, dim_y + 10, text=label, fill="#2fa572", font=("Arial", 9))
+            for x, y in mount.hole_positions:
+                shapes.append({
+                    "pts": self._circle_3d(x, y, mount.bolt_hole_dia_mm / 2, T),
+                    "fill": "#121614", "outline": "#2fa572", "width": 1,
+                })
+            if mount.center_hole_dia_mm > 0:
+                shapes.append({
+                    "pts": self._circle_3d(0, 0, mount.center_hole_dia_mm / 2, T),
+                    "fill": "#121614", "outline": "#2fa572", "width": 1,
+                })
 
-        # --- Slots / holes ---
-        if hm in ("2020-slots", "4040-slots"):
-            spacing = math.ceil((motor_w_mm + 15) / 20) * 20
-            slot_x_offset = (spacing / 2) * scale
-            s_len_px, s_wid_px = (20, 6) if self.host_slot_dir_var.get() == "parallel" else (6, 20)
-            for sign in [-1, 1]:
-                sx = mx + sign * slot_x_offset
-                c.create_rectangle(
-                    sx - s_wid_px / 2, my - s_len_px / 2,
-                    sx + s_wid_px / 2, my + s_len_px / 2,
-                    fill="black", outline="cyan",
+        # Host-side features -- the point of this panel.
+        for x, y, length, width, direction in mount.host_slots:
+            shapes.append({
+                "pts": self._slot_3d(x, y, length, width, direction, T),
+                "fill": "#0f1a1c", "outline": "#4fd6e0", "width": 2,
+            })
+        for x, y, dia in mount.host_holes:
+            shapes.append({
+                "pts": self._circle_3d(x, y, dia / 2, T),
+                "fill": "#0f1a1c", "outline": "#4fd6e0", "width": 2,
+            })
+        if mount.host_slots:
+            # Label the slot nearest the viewer. The far one sits behind the
+            # motor body in this projection.
+            near = max(mount.host_slots, key=lambda s: s[0] + s[1])
+            labels.append((
+                (near[0], near[1], T), "Slot",
+                "#4fd6e0", ("Arial", 8), (0, -16), "center",
+            ))
+
+        # Dimension lines: width along the front-bottom edge, thickness up the
+        # near corner.
+        dim_drop = max(W, H) * 0.10
+        shapes.append({
+            "pts": [(-hw, hh + dim_drop, 0), (hw, hh + dim_drop, 0)],
+            "fill": "", "outline": "#2fa572", "width": 1, "open": True,
+        })
+        width_label = f"{W:.0f}mm"
+        width_label += " (override)" if self.plate_width_override_var.get().strip() else " (auto)"
+        labels.append((
+            (0, hh + dim_drop, 0), width_label,
+            "#2fa572", ("Arial", 9), (0, 16), "center",
+        ))
+
+        shapes.append({
+            "pts": [(hw + dim_drop * 0.6, hh, 0), (hw + dim_drop * 0.6, hh, T)],
+            "fill": "", "outline": "#e0a54f", "width": 1, "open": True,
+        })
+        t_text = f"t = {T_real:.2f}mm"
+        if exaggerated:
+            t_text += " (not to scale)"
+        labels.append((
+            (hw + dim_drop * 0.6, hh, T / 2), t_text,
+            "#e0a54f", ("Arial", 8), (10, 4), "w",
+        ))
+
+        # --- project, fit, draw ---
+        projected = [[self._iso(*p) for p in s["pts"]] for s in shapes]
+        label_pts = [self._iso(*entry[0]) for entry in labels]
+
+        every = [p for poly in projected for p in poly] + label_pts
+        xs = [p[0] for p in every]
+        ys = [p[1] for p in every]
+        span_x = max(max(xs) - min(xs), 1e-6)
+        span_y = max(max(ys) - min(ys), 1e-6)
+        pad = 26  # room for the dimension text, which sits outside the solid
+        scale = min((cw - pad) / span_x, (ch - pad) / span_y)
+        off_x = cw / 2 - (min(xs) + max(xs)) / 2 * scale
+        off_y = ch / 2 - (min(ys) + max(ys)) / 2 * scale
+
+        def to_canvas(pt):
+            return (pt[0] * scale + off_x, pt[1] * scale + off_y)
+
+        for shape, poly in zip(shapes, projected):
+            flat = [v for pt in poly for v in to_canvas(pt)]
+            if shape.get("open"):
+                c.create_line(*flat, fill=shape["outline"], width=shape["width"])
+            else:
+                c.create_polygon(
+                    *flat,
+                    fill=shape["fill"],
+                    outline=shape["outline"],
+                    width=shape["width"],
+                    dash=shape.get("dash", ()),
                 )
-            c.create_text(mx - slot_x_offset, my - mh / 2 - 8, text="Slot", fill="cyan", font=("Arial", 8))
-            c.create_text(mx + slot_x_offset, my - mh / 2 - 8, text="Slot", fill="cyan", font=("Arial", 8))
-        elif hm == "corner-holes":
-            inset = 10 * scale
-            for dx in [-1, 1]:
-                for dy in [-1, 1]:
-                    cx, cy = mx + dx * (pw / 2 - inset), my + dy * (ph / 2 - inset)
-                    c.create_oval(cx - 4, cy - 4, cx + 4, cy + 4, fill="black", outline="cyan")
+
+        for entry, pt in zip(labels, label_pts):
+            _pos, text, colour, font, (dx, dy), anchor = entry
+            x, y = to_canvas(pt)
+            c.create_text(x + dx, y + dy, text=text, fill=colour,
+                          font=font, anchor=anchor)
 
     def _on_material_change(self, value: str) -> None:
         if value == "custom":
@@ -646,7 +789,17 @@ class App(ctk.CTk):
         result = verify.verify(step_path, mount, material, thickness.required_thickness_mm)
 
         report_path = self.output_dir / "inspection_report.md"
-        write_report(report_path, mount.name, material.name, load_n, safety_factor, thickness, result)
+        # The on-screen preview lives in a temp file; the report needs one
+        # that survives alongside it.
+        report_preview = self.output_dir / "preview.png"
+        try:
+            generate.snapshot_preview(kcl_path, report_preview)
+        except Exception:
+            report_preview = None
+        write_report(
+            report_path, mount.name, material.name, load_n, safety_factor,
+            thickness, result, preview_path=report_preview,
+        )
         self.after(0, lambda: self._on_generate_done(result, report_path))
 
     def _on_generate_error(self, message: str) -> None:
