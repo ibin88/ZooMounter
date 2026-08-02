@@ -100,6 +100,20 @@ pip install -e ".[all]"     # or just ".[mcp]" / ".[gui]" for less
 
 That puts `zoomounter`, `zoomounter-gui` and `zoomounter-mcp` on your PATH.
 
+**Keep the `-e`.** Without it, pip copies the package into site-packages and
+that copy never changes again. You then get the confusing failure where
+running from inside the repo picks up your edits and running from anywhere
+else silently uses a months-old snapshot — same command, two different
+programs, no error either way. If a fix you know you made isn't showing up,
+check which copy is loaded:
+
+```bash
+python -c "import zoomounter; print(zoomounter.__file__)"
+```
+
+It should print a path inside this repo. If it prints something under
+`site-packages`, re-run the install above.
+
 Also required:
 - A [Zoo API token](https://zoo.dev/signup) — copy `.env.example` to `.env` and paste it in.
   ZooMounter finds this file wherever you run it from, so a project-local
