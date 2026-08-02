@@ -1,0 +1,86 @@
+┌──────────────────────────────────────────────────┐
+│ ZooMounter                                       │
+│ A few questions to size and generate your mount. │
+└──────────────────────────────────────────────────┘
+
+                                     Spec                                      
+Mount                    NEMA 17 stepper motor mount (with 4040-slots)         
+Material                 Aluminum 6061-T6 (machined)                           
+Load type                radial                                                
+External load            20.0 N                                                
++ Component self-weight  2.75 N (0.28 kg) -> effective load 23.66 N            
+Safety factor            2.0                                                   
+Calculated thickness     1.00 mm  (governed by process minimum wall            
+                         (machined))                                           
+  - [INFO] Includes 2.75N of component self-weight (worst case: shaft mounted 
+horizontal, so gravity acts as a side load too).
+  - [PASS] Radial load 20N is within the published radial limit of 28N for NEMA
+17 stepper motor mount (with 4040-slots). (Source: ATO NEMA 17 (42mm) 
+datasheet: Axial Max. Load 10N, Radial Max. Load 28N)
+  - [INFO] The engineering calcs came out below the minimum manufacturable wall
+thickness, so the process floor sets the answer -- this part is not 
+structurally limited at this load.
+
+Agent API prompt: Define these named parameters at the top of the file, using 
+exactly these names. Where an expression is given, write the expression -- do 
+not replace it with a pre-computed number:
+
+  plateThickness   = 1mm
+  plateHeight      = 42.3mm
+  boltHoleDia      = 3.4mm
+  boltSpacing      = 31mm
+  boltHoleOffset   = boltSpacing / 2
+  centerHoleDia    = 22mm
+  slotSpacing      = 80mm
+  slotLength       = 20mm
+  slotWidth        = 9mm
+  edgeMargin       = 15mm
+  slotCenterOffset = slotSpacing / 2
+  plateWidth       = slotSpacing + 2 * edgeMargin
+
+Then build the part from those parameters, referring to them by name rather 
+than repeating their values:
+
+A flat rectangular mounting plate, plateWidth wide (x-axis) by plateHeight tall
+(y-axis) by plateThickness thick, centered at the origin.
+It has 4 through-holes of boltHoleDia diameter, centered at (-boltHoleOffset, 
+-boltHoleOffset), (boltHoleOffset, -boltHoleOffset), (boltHoleOffset, 
+boltHoleOffset) and (-boltHoleOffset, boltHoleOffset).
+It also has a through-hole of centerHoleDia diameter centered on the plate.
+It also has 2 adjustment slots cut through the full thickness, each slotLength 
+long along the y-axis and slotWidth wide with semicircular ends, centered at 
+(-slotCenterOffset, 0) and (slotCenterOffset, 0).
+All holes and slots go through the full thickness of the plate.
+
+Output folder: probes\preview\4040-slots
+
+
+                            Parametric model                             
+Check            Result  Detail                                          
+Parameter names  PASS    12/12 declared                                  
+Relationships    PASS    3/3 derived as asked                            
+Model            info    14 parameters, 5 derived (36%), 35 constraints  
+Editable in Design Studio: change boltHoleOffset, plateWidth, slotCenterOffset 
+and the dependent dimensions follow.
+
+Preview: probes\preview\4040-slots\preview.png
+Generated: probes\preview\4040-slots\export\output.step
+
+
+                                 Verification                                  
+┌────────────────┬────────┬───────────────────────────────────────────────────┐
+│ Check          │ Result │ Detail                                            │
+├────────────────┼────────┼───────────────────────────────────────────────────┤
+│ Hole positions │ PASS   │ all 9 holes present and within 0.5mm of spec      │
+│                │        │ (worst: 0.000mm)                                  │
+│ Bounding box   │ PASS   │ 110.00 x 42.30 x 1.00 mm vs specified 110.00 x    │
+│                │        │ 42.30 x 1.00 mm (worst axis: width, 0.0%)         │
+│ Volume         │ PASS   │ 3912.4 mm3 measured vs 3876.6 mm3 from the        │
+│                │        │ requested geometry (0.9%)                         │
+└────────────────┴────────┴───────────────────────────────────────────────────┘
+Mass of the generated part: 10.56 g (reported property, not an independent 
+check -- it is volume x the density you supplied)
+┌──────┐
+│ PASS │
+└──────┘
+Report: probes\preview\4040-slots\inspection_report.md
