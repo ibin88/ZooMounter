@@ -26,7 +26,7 @@ from zoomounter.bearings import (
     check_seat_depth,
     select_bearing,
 )
-from zoomounter.generate import build_prompt
+from zoomounter.generate import build_parametric_prompt, build_prompt
 from zoomounter.materials import get_material
 from zoomounter.mount_specs import MOUNTS
 from zoomounter.verify import expected_holes
@@ -275,18 +275,62 @@ def test_counterbore_volume_does_not_double_count_the_shaft_hole():
     assert gen.estimate_volume_mm3(t) > naive_through
 
 
-def test_prompt_describes_a_through_bore_for_radial():
-    gen = bearing_block(BY_DESIGNATION["608"], "radial")
-    prompt = build_prompt(gen, ALUMINIUM, 8.0)
-    assert "22mm diameter through-hole" in prompt
-    assert "counterbore" not in prompt
+def _literal(mount, thickness):
+    return build_prompt(mount, ALUMINIUM, thickness)
 
 
-def test_prompt_describes_a_blind_counterbore_for_thrust():
-    gen = bearing_block(BY_DESIGNATION["51101"], "axial")
-    prompt = build_prompt(gen, ALUMINIUM, 12.0)
-    assert "26mm diameter counterbore 9mm deep" in prompt
-    assert "blind to its stated depth" in prompt
+def _parametric(mount, thickness):
+    return build_parametric_prompt(mount, ALUMINIUM, thickness)[0]
+
+
+# Both builders, always. The seat clause was added to the literal prompt and
+# silently missed on the parametric one, which is the default path -- so the
+# tool declared bearingSeatDia and bearingSeatDepth as parameters and then
+# never mentioned the counterbore in the body. The generated block would have
+# had no seat at all. Testing only one builder is what let that through.
+BUILDERS = [
+    pytest.param(_literal, id="literal"),
+    pytest.param(_parametric, id="parametric"),
+]
+
+
+@pytest.mark.parametrize("build", BUILDERS)
+def test_prompt_describes_a_through_bore_for_radial(build):
+    prompt = build(bearing_block(BY_DESIGNATION["608"], "radial"), 8.0)
+    assert "608" in prompt
+    assert "counterbore" not in prompt.lower()
+
+
+@pytest.mark.parametrize("build", BUILDERS)
+def test_prompt_describes_a_blind_counterbore_for_thrust(build):
+    prompt = build(bearing_block(BY_DESIGNATION["51101"], "axial"), 12.0)
+    assert "counterbore" in prompt.lower()
+    assert "blind" in prompt.lower()
+    assert "51101" in prompt
+
+
+@pytest.mark.parametrize("build", BUILDERS)
+def test_thrust_prompt_never_claims_the_seat_goes_all_the_way_through(build):
+    """A blind counterbore and 'all holes go through the full thickness' in
+    the same prompt is a contradiction, and the model resolves it by drilling
+    straight through."""
+    prompt = build(bearing_block(BY_DESIGNATION["51101"], "axial"), 12.0)
+    assert "All holes and slots go through the full thickness of the plate." not in prompt
+
+
+def test_parametric_prompt_uses_every_parameter_it_declares():
+    """Declaring a parameter and never referring to it produced exactly this
+    bug: bearingSeatDia and bearingSeatDepth were defined at the top of the
+    prompt and absent from the body, so the seat was never built."""
+    for designation, load_type in [("608", "radial"), ("51101", "axial")]:
+        mount = bearing_block(BY_DESIGNATION[designation], load_type)
+        prompt, scheme = build_parametric_prompt(mount, ALUMINIUM, 12.0)
+        body = prompt.split("referring to them by name", 1)[1]
+        for name in scheme.names:
+            assert name in body, (
+                f"{designation}: '{name}' is declared but never used in the "
+                f"prompt body"
+            )
 
 
 # ---------------------------------------------------------------------------

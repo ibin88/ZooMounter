@@ -237,13 +237,18 @@ def build_parametric_prompt(
             "boltHoleOffset) and (-boltHoleOffset, boltHoleOffset)."
         )
     else:
+        # Positions fall back to literals -- a circular or irregular pattern
+        # is not derivable from one number -- but the diameter is still a
+        # declared parameter and has to be referenced by name. Writing the
+        # number here left boltHoleDia declared and unused, which is how the
+        # bearing seat clause went missing too.
         hole_list = "; ".join(
             f"({_fmt(x)}mm, {_fmt(y)}mm)" for x, y in mount.hole_positions
         )
         body.append(
-            f"It has {len(mount.hole_positions)} through-holes, each "
-            f"{_fmt(mount.bolt_hole_dia_mm)}mm in diameter, centered at these "
-            f"(x, y) coordinates relative to the plate center: {hole_list}."
+            f"It has {len(mount.hole_positions)} through-holes of boltHoleDia "
+            f"diameter, centered at these (x, y) coordinates relative to the "
+            f"plate center: {hole_list}."
         )
 
     if "centerHoleDia" in names:
@@ -281,7 +286,28 @@ def build_parametric_prompt(
             f"{host_list}."
         )
 
-    body.append("All holes and slots go through the full thickness of the plate.")
+    if mount.bearing_seat_dia_mm > 0:
+        if mount.bearing_seat_depth_mm > 0:
+            body.append(
+                "It has a counterbore of bearingSeatDia diameter and "
+                "bearingSeatDepth depth, centered on the plate and opening "
+                f"from the top face, to seat a {mount.bearing_designation} thrust "
+                "bearing. The counterbore is blind -- it does not go through "
+                "the plate."
+            )
+        else:
+            body.append(
+                "It has a through-hole of bearingSeatDia diameter centered on "
+                f"the plate, sized to seat a {mount.bearing_designation} bearing."
+            )
+
+    if mount.bearing_seat_depth_mm > 0:
+        body.append(
+            "All holes go through the full thickness of the plate, except the "
+            "counterbore, which is blind to its stated depth."
+        )
+    else:
+        body.append("All holes and slots go through the full thickness of the plate.")
     return "\n".join(body), scheme
 
 
