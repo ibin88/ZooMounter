@@ -28,12 +28,13 @@ from . import generate, mechanics, verify
 from .config import load_environment
 from .cli import default_output_dir, write_report
 from .materials import MATERIALS, get_material
+from .bearings import BY_DESIGNATION, auto_bearing_mount
 from .mount_specs import MOUNTS, get_mount
 
 ctk.set_appearance_mode("system")
 ctk.set_default_color_theme("blue")
 
-MOUNT_KEYS = [*MOUNTS.keys(), "custom"]
+MOUNT_KEYS = [*MOUNTS.keys(), "bearing", "custom"]
 MATERIAL_KEYS = [*MATERIALS.keys(), "custom"]
 
 
@@ -74,6 +75,25 @@ class App(ctk.CTk):
         )
         row += 1
 
+        self.bearing_frame = ctk.CTkFrame(form, fg_color="transparent")
+        self.bearing_frame.grid(row=row, column=0, columnspan=2, sticky="ew")
+        self.bearing_frame.grid_columnconfigure(1, weight=1)
+        self.shaft_dia_var = self._labeled_entry(
+            self.bearing_frame, 0, "Shaft diameter (mm)", "8")
+        ctk.CTkLabel(self.bearing_frame, text="Bearing").grid(row=1, column=0, sticky="w")
+        self.bearing_var = ctk.StringVar(value="auto")
+        ctk.CTkOptionMenu(
+            self.bearing_frame,
+            values=["auto", *sorted(BY_DESIGNATION)],
+            variable=self.bearing_var,
+        ).grid(row=1, column=1, sticky="ew", pady=4)
+        ctk.CTkLabel(
+            self.bearing_frame,
+            text="auto picks the smallest bearing that fits the shaft and carries the load. Radial loads get a deep groove bearing, axial loads a thrust bearing.",
+            font=ctk.CTkFont(size=11), text_color="gray60", anchor="w", wraplength=380,
+        ).grid(row=2, column=0, columnspan=2, sticky="w")
+        row += 1
+
         self.custom_mount_frame = ctk.CTkFrame(form, fg_color="transparent")
         self.custom_mount_frame.grid(row=row, column=0, columnspan=2, sticky="ew")
         self.custom_mount_frame.grid_columnconfigure(1, weight=1)
@@ -102,6 +122,14 @@ class App(ctk.CTk):
         self.plate_width_override_var = self._labeled_entry(self.host_mount_frame, 1, "Plate width override (mm, blank=auto)", "")
         self.plate_width_override_var.trace_add("write", lambda *_: self._draw_schematic())
         
+        ctk.CTkLabel(self.host_mount_frame, text="Component face").grid(row=3, column=0, sticky="w")
+        self.mounting_face_var = ctk.StringVar(value="front")
+        ctk.CTkOptionMenu(
+            self.host_mount_frame, values=["front", "back"],
+            variable=self.mounting_face_var,
+            command=lambda _: self._draw_schematic(),
+        ).grid(row=3, column=1, sticky="ew", pady=4)
+
         self.schematic_canvas = ctk.CTkCanvas(self.host_mount_frame, height=180, bg="#2b2b2b", highlightthickness=0)
         self.schematic_canvas.grid(row=2, column=0, columnspan=2, sticky="ew", pady=8)
         row += 1
@@ -207,6 +235,7 @@ class App(ctk.CTk):
             self.custom_mount_frame.grid()
         else:
             self.custom_mount_frame.grid_remove()
+        self._on_bearing_visibility(value)
 
     def _on_host_mount_change(self, value: str) -> None:
         if value == "none":
@@ -471,6 +500,12 @@ class App(ctk.CTk):
             c.create_text(x + dx, y + dy, text=text, fill=colour,
                           font=font, anchor=anchor)
 
+    def _on_bearing_visibility(self, mount_key: str) -> None:
+        if mount_key == "bearing":
+            self.bearing_frame.grid()
+        else:
+            self.bearing_frame.grid_remove()
+
     def _on_material_change(self, value: str) -> None:
         if value == "custom":
             self.custom_material_frame.grid()
@@ -546,6 +581,8 @@ class App(ctk.CTk):
     # ---- spec resolution --------------------------------------------------
 
     def _resolve_spec(self):
+        if self.mount_var.get() == "bearing":
+            return self._resolve_bearing_spec()
         mount = get_mount(
             self.mount_var.get(),
             plate_width_mm=float(self.plate_width_var.get()) if self.plate_width_var.get() else None,
@@ -581,6 +618,48 @@ class App(ctk.CTk):
             lever_arm_mm=overhang,
             load_type=self.load_type_var.get(),
         )
+        return mount, material, load_n, safety_factor, thickness
+
+    def _resolve_bearing_spec(self):
+        """Same shape as _resolve_spec, for a block built around a bearing
+        chosen from the load case."""
+        load_n = float(self.load_var.get())
+        safety_factor = float(self.safety_var.get())
+        designation = self.bearing_var.get()
+        mount, selection = auto_bearing_mount(
+            load_type=self.load_type_var.get(),
+            load_n=load_n,
+            shaft_dia_mm=float(self.shaft_dia_var.get()),
+            safety_factor=safety_factor,
+            designation=None if designation == "auto" else designation,
+        )
+        if mount is None:
+            raise ValueError(
+                "; ".join(n.message for n in selection.notes if n.level == "LOUD WARN")
+                or "No bearing fits this case."
+            )
+        material = get_material(
+            self.material_var.get(),
+            density_kg_m3=float(self.density_var.get()) if self.density_var.get() else None,
+            youngs_modulus_gpa=float(self.youngs_var.get()) if self.youngs_var.get() else None,
+            yield_mpa=float(self.yield_var.get()) if self.yield_var.get() else None,
+            process=self.process_var.get(),
+        )
+        thickness = mechanics.required_thickness(
+            load_n=load_n, mount=mount, material=material,
+            safety_factor=safety_factor,
+            lever_arm_mm=float(self.overhang_var.get()) if self.overhang_var.get() else None,
+            load_type=self.load_type_var.get(),
+        )
+        # Selection notes ride along with the thickness result so they reach
+        # the results panel and the report without extra plumbing.
+        from . import bearings as _b
+        thickness.notes.extend(selection.notes)
+        thickness.notes.append(
+            _b.check_seat_depth(selection.bearing, thickness.required_thickness_mm,
+                                self.load_type_var.get())
+        )
+        self._selected_bearing = selection.bearing
         return mount, material, load_n, safety_factor, thickness
 
     def _preview(self) -> None:
@@ -763,6 +842,40 @@ class App(ctk.CTk):
             traceback.print_exc()
             self.after(0, lambda: self._on_generate_error(f"{type(e).__name__}: {e}"))
 
+    def _build_assembly(self, mount, thickness, kcl_code):
+        """Write the to-scale assembly and an exploded copy for the render.
+
+        Returns the exploded main.kcl, or None if anything went wrong -- a
+        failed assembly costs the context view, never the part."""
+        from . import assembly as asm
+
+        try:
+            base = get_mount(self.mount_var.get()) if self.mount_var.get() in MOUNTS else mount
+        except Exception:
+            base = mount
+        bearing = getattr(self, "_selected_bearing", None)
+        if self.mount_var.get() != "bearing":
+            bearing = None
+        face = self.mounting_face_var.get()
+        t_mm = thickness.required_thickness_mm
+
+        try:
+            main, _ = asm.write_assembly(
+                self.output_dir / "assembly", mount, t_mm, kcl_code,
+                bearing=bearing, face=face, base_mount=base,
+            )
+            generate._write_project_toml(self.output_dir / "assembly")
+            exploded, _ = asm.write_assembly(
+                self.output_dir / "assembly-exploded", mount, t_mm, kcl_code,
+                bearing=bearing, face=face, base_mount=base,
+                explode_mm=asm.DEFAULT_EXPLODE_MM,
+            )
+            generate._write_project_toml(self.output_dir / "assembly-exploded")
+            return exploded
+        except Exception:
+            traceback.print_exc()
+            return None
+
     def _run_pipeline_inner(self, mount, material, load_n, safety_factor, thickness, do_export_step: bool) -> None:
         def on_status(elapsed: float, status: str) -> None:
             self.after(0, lambda: self.status_label.configure(text=f"Generating... {status} ({elapsed:.0f}s elapsed)"))
@@ -771,9 +884,17 @@ class App(ctk.CTk):
         kcl_code = generate.generate_kcl(prompt, on_status=on_status)
         kcl_path = generate.write_kcl_project(kcl_code, self.output_dir)
 
+        # Render the assembly rather than the bare plate. The mount alone does
+        # not answer the questions people actually have -- which way the shaft
+        # points, whether the motor clears the extrusion, where the bearing
+        # sits. Exploded, because a 1mm plate under a 40mm motor is correct
+        # and invisible.
+        self.after(0, lambda: self.status_label.configure(text="Building assembly..."))
+        render_path = self._build_assembly(mount, thickness, kcl_code) or kcl_path
+
         self.after(0, lambda: self.status_label.configure(text="Rendering preview..."))
         preview_path = Path(tempfile.gettempdir()) / f"zoomounter_preview_{uuid.uuid4().hex}.png"
-        generate.snapshot_preview(kcl_path, preview_path)
+        generate.snapshot_preview(render_path, preview_path)
         # Scheduled onto the main thread via .after(), not called directly --
         # this background thread must not touch the file after this point
         # (see _show_preview_image for why, and where the cleanup happens).

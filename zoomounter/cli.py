@@ -91,6 +91,16 @@ def build_parser() -> argparse.ArgumentParser:
         "from the current directory, so no paths needed. e.g. --add xMotorMount",
     )
 
+    asm = p.add_argument_group("Assembly options")
+    asm.add_argument(
+        "--mounting-face", choices=["front", "back"], default="front",
+        help="Which side of the plate the component body sits on. 'front' puts the body on +Z with the shaft passing down through the plate; 'back' flips it. Affects the assembly only, not the mount geometry.",
+    )
+    asm.add_argument(
+        "--no-assembly", action="store_true",
+        help="Write only the mount. By default ZooMounter also emits reference bodies for the component and bearing and an assembly you can open in Design Studio.",
+    )
+
     bearing_group = p.add_argument_group("--mount bearing options")
     bearing_group.add_argument(
         "--shaft-dia-mm", type=float, default=None,
@@ -198,6 +208,42 @@ def _prompt_for_missing(args: argparse.Namespace) -> None:
         )
     if args.load_n is None:
         args.load_n = FloatPrompt.ask("Expected load on the mount (N)", default=5.0)
+
+
+def _write_assembly(output_dir, mount, base_mount, thickness_mm, mount_kcl,
+                    bearing_selection, face):
+    """Write the assembly beside the mount, plus an exploded copy for the
+    render.
+
+    Two folders on purpose. `assembly/` is the real thing, to scale, openable
+    in Design Studio. `assembly-exploded/` exists only to be photographed --
+    a 1mm plate under a 40mm motor is correct and completely unreadable. The
+    exploded copy is never verified, so a deliberately-not-to-scale view can
+    never be mistaken for the part.
+    """
+    from . import assembly as asm
+
+    bearing = bearing_selection.bearing if bearing_selection else None
+    try:
+        main, parts = asm.write_assembly(
+            output_dir / "assembly", mount, thickness_mm, mount_kcl,
+            bearing=bearing, face=face, base_mount=base_mount,
+        )
+        generate._write_project_toml(output_dir / "assembly")
+
+        exploded, _ = asm.write_assembly(
+            output_dir / "assembly-exploded", mount, thickness_mm, mount_kcl,
+            bearing=bearing, face=face, base_mount=base_mount,
+            explode_mm=asm.DEFAULT_EXPLODE_MM,
+        )
+        generate._write_project_toml(output_dir / "assembly-exploded")
+
+        roles = ", ".join(p.role for p in parts)
+        console.print(f"[green]Assembly:[/green] {main}  [dim]({roles})[/dim]")
+        return exploded
+    except Exception as e:
+        console.print(f"[dim]Assembly skipped: {e}[/dim]")
+        return None
 
 
 def _render_preview(kcl_path: Path, output_dir: Path) -> Path | None:
@@ -526,6 +572,7 @@ def main(argv: list[str] | None = None) -> int:
             )
         
         from .mount_specs import apply_host_mount
+        base_mount = mount
         mount = apply_host_mount(
             mount,
             host_mount=args.host_mount,
@@ -603,7 +650,13 @@ def main(argv: list[str] | None = None) -> int:
                 spinner.stop()
                 print_parametric_report(kcl_code, scheme)
 
-            preview_path = _render_preview(kcl_path, output_dir)
+            assembly_main = None
+            if not args.no_assembly:
+                assembly_main = _write_assembly(
+                    output_dir, mount, base_mount, thickness.required_thickness_mm,
+                    kcl_code, bearing_selection, args.mounting_face,
+                )
+            preview_path = _render_preview(assembly_main or kcl_path, output_dir)
 
             if args.no_export:
                 spinner.stop()

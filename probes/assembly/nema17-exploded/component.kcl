@@ -1,0 +1,38 @@
+// Reference geometry for a NEMA 17 stepper motor mount.
+// Drawn from catalogue dimensions for context only -- this is not
+// the designed part and is not verified against anything.
+@settings(defaultLengthUnit = mm, kclVersion = 2.0)
+
+motorBodyPlane = offsetPlane(XY, offset = 25.525)
+motorBodySketch = sketch(on = motorBodyPlane) {
+  e1 = line(start = [-21.15mm, -21.15mm], end = [21.15mm, -21.15mm])
+  e2 = line(start = [21.15mm, -21.15mm], end = [21.15mm, 21.15mm])
+  e3 = line(start = [21.15mm, 21.15mm], end = [-21.15mm, 21.15mm])
+  e4 = line(start = [-21.15mm, 21.15mm], end = [-21.15mm, -21.15mm])
+}
+motorBodyRegion = region(
+  segments = [motorBodySketch.e1, motorBodySketch.e2, motorBodySketch.e3, motorBodySketch.e4],
+)
+extrude(motorBodyRegion, length = 40)
+  |> appearance(color = "#3d4756")
+hiddenmotorBody = hide(motorBodySketch)
+
+pilotBossPlane = offsetPlane(XY, offset = 25.525)
+pilotBossSketch = sketch(on = pilotBossPlane) {
+  profile = circle(start = [11mm, 0mm], center = [0mm, 0mm])
+  diameter(profile) == 22mm
+}
+pilotBossRegion = region(segments = [pilotBossSketch.profile])
+extrude(pilotBossRegion, length = -2)
+  |> appearance(color = "#3d4756")
+hiddenpilotBoss = hide(pilotBossSketch)
+
+shaftPlane = offsetPlane(XY, offset = 25.525)
+shaftSketch = sketch(on = shaftPlane) {
+  profile = circle(start = [2.5mm, 0mm], center = [0mm, 0mm])
+  diameter(profile) == 5mm
+}
+shaftRegion = region(segments = [shaftSketch.profile])
+extrude(shaftRegion, length = -21.05)
+  |> appearance(color = "#c8ccd2")
+hiddenshaft = hide(shaftSketch)
