@@ -37,6 +37,13 @@ from pathlib import Path
 _CARTESIAN_POINT_RE = re.compile(
     r"#(\d+)\s*=\s*CARTESIAN_POINT\s*\(\s*'[^']*'\s*,\s*\(([^)]*)\)\s*\)", re.IGNORECASE
 )
+
+# The CARTESIAN_POINT a VERTEX_POINT resolves to. These are the only points
+# that are corners of the finished solid; everything else in the file may be
+# construction or tool geometry that the booleans consumed.
+_VERTEX_POINT_RE = re.compile(
+    r"VERTEX_POINT\s*\(\s*'[^']*'\s*,\s*#(\d+)\s*\)", re.IGNORECASE
+)
 _AXIS_PLACEMENT_RE = re.compile(
     r"#(\d+)\s*=\s*AXIS2_PLACEMENT_3D\s*\(\s*'[^']*'\s*,\s*#(\d+)", re.IGNORECASE
 )
@@ -163,9 +170,28 @@ def parse_step(step_path: Path) -> StepGeometry:
             )
         )
 
-    xs = [p[0] * scale for p in points.values()]
-    ys = [p[1] * scale for p in points.values()]
-    zs = [p[2] * scale for p in points.values()]
+    # Bound the SOLID, using only points that are vertices of it.
+    #
+    # Every CARTESIAN_POINT in the file is not the part. A subtract leaves
+    # behind the geometry that defined the cutting tool, and a tool is
+    # deliberately larger than the body it cuts. On a thrust-bearing block --
+    # counterbore revolved from a profile spanning +/-11mm, subtracted from an
+    # 11mm plate -- measuring every point gave a 16.50mm thickness for a part
+    # that is exactly 11.00mm, and the verifier failed a correct part by 50%.
+    #
+    # VERTEX_POINT entities are the corners of the trimmed result, so they
+    # describe what survived the boolean rather than what went into it.
+    vertex_ids = set(_VERTEX_POINT_RE.findall(text))
+    bounded = [points[i] for i in vertex_ids if i in points]
+    if not bounded:
+        # Nothing vertex-referenced (a purely cylindrical body, or a writer
+        # that names entities differently). Fall back rather than crash, since
+        # an over-large box is still more useful than no answer.
+        bounded = list(points.values())
+
+    xs = [p[0] * scale for p in bounded]
+    ys = [p[1] * scale for p in bounded]
+    zs = [p[2] * scale for p in bounded]
     bbox = BoundingBox(min(xs), max(xs), min(ys), max(ys), min(zs), max(zs))
 
     return StepGeometry(circles=_merge_coincident(circles), bbox=bbox)

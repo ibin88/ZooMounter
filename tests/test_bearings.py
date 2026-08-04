@@ -29,7 +29,10 @@ from zoomounter.bearings import (
 from zoomounter.generate import build_parametric_prompt, build_prompt
 from zoomounter.materials import get_material
 from zoomounter.mount_specs import MOUNTS
-from zoomounter.verify import expected_holes
+from pathlib import Path
+
+from zoomounter.step_inspect import parse_step
+from zoomounter.verify import check_hole_positions, expected_holes
 
 ALUMINIUM = get_material("aluminum_6061")
 
@@ -358,3 +361,61 @@ def test_unknown_designation_is_an_error():
 def test_auto_mount_returns_none_when_nothing_fits():
     spec, sel = auto_bearing_mount("axial", 120, 5.0, 2.0)
     assert spec is None and sel.bearing is None
+
+
+# ---------------------------------------------------------------------------
+# Bounding box must measure the solid, not the tools that cut it.
+# ---------------------------------------------------------------------------
+
+THRUST_STEP = (
+    Path(__file__).parent.parent
+    / "probes" / "bearing" / "51101-thrust" / "export" / "output.step"
+)
+
+
+@pytest.mark.skipif(not THRUST_STEP.exists(), reason="fixture not generated")
+def test_bbox_ignores_the_geometry_of_consumed_cutting_tools():
+    """The thrust block is 11mm thick and was cut by a revolved profile
+    spanning +/-11mm. Measuring every CARTESIAN_POINT in the file gave 16.50mm
+    and failed a part that is exactly right by 50% -- a false FAIL, which
+    costs more trust than a false pass.
+
+    VERTEX_POINTs are the corners of what survived the boolean."""
+    geo = parse_step(THRUST_STEP)
+    assert geo.bbox.thickness_mm == pytest.approx(11.0, abs=0.01)
+    assert geo.bbox.width_mm == pytest.approx(44.0, abs=0.01)
+
+
+@pytest.mark.skipif(not THRUST_STEP.exists(), reason="fixture not generated")
+def test_the_fixture_really_does_contain_points_outside_the_solid():
+    """Guards the test above. If this file ever stops carrying stray tool
+    geometry, the test proves nothing and should be pointed at one that
+    does."""
+    from zoomounter.step_inspect import (
+        _CARTESIAN_POINT_RE,
+        _parse_coords,
+        _scale_to_mm,
+    )
+
+    text = THRUST_STEP.read_text(errors="replace")
+    scale = _scale_to_mm(text)
+    zs = [
+        _parse_coords(c)[2] * scale
+        for _, c in _CARTESIAN_POINT_RE.findall(text)
+        if len(_parse_coords(c)) == 3
+    ]
+    naive_thickness = max(zs) - min(zs)
+    assert naive_thickness > 11.0 + 1.0, (
+        "fixture no longer exercises the bug this test exists for"
+    )
+
+
+@pytest.mark.skipif(not THRUST_STEP.exists(), reason="fixture not generated")
+def test_the_generated_thrust_block_verifies():
+    """End-to-end: the counterbore geometry the API built matches what was
+    asked for, checked hole by hole out of the STEP."""
+    mount = bearing_block(BY_DESIGNATION["51101"], "axial")
+    geo = parse_step(THRUST_STEP)
+    result, details = check_hole_positions(geo, mount)
+    assert result.passed, result.detail
+    assert len(details) == 6  # 4 bolt + shaft bore + counterbore

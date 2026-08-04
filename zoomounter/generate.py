@@ -23,7 +23,17 @@ from .mount_specs import MountSpec
 
 API_BASE = "https://api.zoo.dev"
 POLL_INTERVAL_S = 10
-POLL_TIMEOUT_S = 300
+
+# 300s was too short and cost a real part. A thrust-bearing block -- four bolt
+# holes, a shaft bore and a blind counterbore -- took 329s server-side, so the
+# client gave up 29 seconds before its own job finished, twice, and reported a
+# timeout for something that had actually succeeded.
+#
+# Feature count drives generation time far more than plate size does, so the
+# ceiling has to clear the most complex part the tool can ask for, not the
+# typical one. Nothing is charged for waiting; abandoning a completed job
+# wastes the credits already spent on it.
+POLL_TIMEOUT_S = 900
 
 
 class GenerationError(RuntimeError):
@@ -362,7 +372,14 @@ def generate_kcl(prompt: str, on_status=None) -> str:
         if status == "failed":
             raise GenerationError(f"Agent API generation failed: {data.get('error')}")
 
-    raise GenerationError(f"Timed out after {POLL_TIMEOUT_S}s waiting for generation job {job_id}.")
+    raise GenerationError(
+        f"Timed out after {POLL_TIMEOUT_S}s waiting for generation job {job_id}.\n"
+        f"The job is probably still running -- a timeout here is this client "
+        f"giving up, not the server failing, and the credits are already spent. "
+        f"Check it before regenerating:\n"
+        f"  curl -H \"Authorization: Bearer $ZOO_API_TOKEN\" "
+        f"{API_BASE}/user/text-to-cad/{job_id}"
+    )
 
 
 def _write_project_toml(output_dir: Path) -> None:

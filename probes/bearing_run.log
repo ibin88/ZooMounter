@@ -1,0 +1,74 @@
+┌──────────────────────────────────────────────────┐
+│ ZooMounter                                       │
+│ A few questions to size and generate your mount. │
+└──────────────────────────────────────────────────┘
+Host mount options: none, 2020-slots, 4040-slots, corner-holes
+Host mounting features (none): No interactive input available; using defaults.
+
+                                     Spec                                      
+Mount                 51101 thrust bearing block                               
+Material              Aluminum 6061-T6 (machined)                              
+Load type             axial                                                    
+External load         400.0 N                                                  
+Safety factor         2.0                                                      
+Calculated thickness  11.00 mm  (governed by bearing seat (51101 counterbore   
+                      + floor))                                                
+  - [INFO] Plate thickness is sized against screw-head pull-through (punching 
+shear on a ~6.1mm head), which calls for 0.08mm here.
+  - [PASS] 4x M3 class-8.8 screws carry an estimated 5835N in tension at SF 
+2.0, well above this load.
+  - [WARN] NOT CHECKED for axial loads: thread engagement depth in the motor's 
+tapped holes, and the motor's own axial bearing rating. -> Remedy: For thrust 
+applications one of those is usually the real limit -- a thin result here means
+the plate is not your constraint, not that the assembly is safe.
+  - [PASS] Axial load 400N is within the published axial limit of 16600N for 
+51101 thrust bearing block. (Source: 51101 basic static load rating C0 = 16600N
+-- SKF catalogue (bearingsize.info))
+  - [INFO] Plate thickness is set by the bearing, not by the load: the 51101 
+needs 11.00mm of plate to seat in. The structural requirement here was 1.00mm.
+  - [PASS] 51101 (12x26x9mm) carries 16600N static, against 800N required (400N
+at SF 2). (Source: SKF catalogue (bearingsize.info))
+  - [PASS] 51101 bore matches the 12mm shaft.
+  - [WARN] Selected on basic static rating C0 only. No L10 fatigue life has 
+been calculated -- that needs shaft speed and duty cycle, which this tool does 
+not ask for. (Source: SKF catalogue (bearingsize.info)) -> Remedy: For anything
+running continuously, do an L10 calculation with your real speed and duty 
+against C = 10400N.
+  - [WARN] The seat is bored to 26mm, the bearing's nominal OD, with no 
+interference allowance applied. -> Remedy: For a machined block, tighten the 
+bore to an H7 press fit before cutting. A 3D-printed block will not hold that 
+tolerance -- expect to shim or retain the outer ring.
+  - [PASS] 11.00mm plate seats the 9mm 51101 in a counterbore with 2mm of 
+material beneath.
+
+Agent API prompt: Define these named parameters at the top of the file, using 
+exactly these names. Where an expression is given, write the expression -- do 
+not replace it with a pre-computed number:
+
+  plateThickness   = 11mm
+  plateHeight      = 44mm
+  boltHoleDia      = 3.4mm
+  centerHoleDia    = 13mm
+  plateWidth       = 44mm
+  bearingSeatDia   = 26mm
+  bearingSeatDepth = 9mm
+
+Then build the part from those parameters, referring to them by name rather 
+than repeating their values:
+
+A flat rectangular mounting plate, plateWidth wide (x-axis) by plateHeight tall
+(y-axis) by plateThickness thick, centered at the origin.
+It has 4 through-holes of boltHoleDia diameter, centered at these (x, y) 
+coordinates relative to the plate center: (19mm, 0mm); (0mm, 19mm); (-19mm, 
+0mm); (-0mm, -19mm).
+It also has a through-hole of centerHoleDia diameter centered on the plate.
+It has a counterbore of bearingSeatDia diameter and bearingSeatDepth depth, 
+centered on the plate and opening from the top face, to seat a 51101 thrust 
+bearing. The counterbore is blind -- it does not go through the plate.
+All holes go through the full thickness of the plate, except the counterbore, 
+which is blind to its stated depth.
+
+Output folder: probes\bearing\51101-thrust
+
+error: Timed out after 300s waiting for generation job 
+f201c212-9cea-438e-b579-1f19193225b1.
