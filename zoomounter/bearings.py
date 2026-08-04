@@ -98,21 +98,29 @@ class Bearing:
 # static, backwards from every other thrust bearing here and from Auburn's own
 # F5-12M. Rather than import a row that contradicts the rest of the table, it
 # is left out until the figure can be confirmed from a primary source.
-BEARINGS: tuple[Bearing, ...] = (
-    Bearing("625", RADIAL, 5, 16, 5, 380, 1100, _SKF),
-    Bearing("626", RADIAL, 6, 19, 6, 950, 2300, _SKF),
-    Bearing("608", RADIAL, 8, 22, 7, 1370, 3450, _SKF),
-    Bearing("6000", RADIAL, 10, 26, 8, 1960, 4750, _SKF),
-    Bearing("6001", RADIAL, 12, 28, 8, 2360, 5400, _SKF),
-    Bearing("6002", RADIAL, 15, 32, 9, 2850, 5850, _SKF),
-    Bearing("6004", RADIAL, 20, 42, 12, 5000, 10000, _SKF),
-    Bearing("F5-12M", THRUST, 5, 12, 4, 1240, 1060, _AUBURN),
-    Bearing("F6-12M", THRUST, 6, 12, 4.5, 2220, 1820, _AUBURN),
-    Bearing("F8-16M", THRUST, 8, 16, 5, 4990, 3920, _AUBURN),
-    Bearing("51100", THRUST, 10, 24, 9, 14000, 10100, _NSK),
-    Bearing("51101", THRUST, 12, 26, 9, 16600, 10400, _SKF),
-    Bearing("51102", THRUST, 15, 28, 9, 16800, 10600, _NSK),
-)
+def _build_bearings() -> tuple[Bearing, ...]:
+    """Load data/bearings.toml. catalogue.load_bearings() validates each row
+    before it gets here -- including that a thrust bearing's static rating is
+    not below its dynamic one, which is how F5-10M's published figures fail
+    and why that row is absent."""
+    from .catalogue import load_bearings
+
+    return tuple(
+        Bearing(
+            designation=r["designation"],
+            kind=r["kind"],
+            bore_mm=r["bore_mm"],
+            od_mm=r["od_mm"],
+            width_mm=r["width_mm"],
+            static_c0_n=r["static_c0_n"],
+            dynamic_c_n=r["dynamic_c_n"],
+            source=r["source"],
+        )
+        for r in load_bearings()
+    )
+
+
+BEARINGS: tuple[Bearing, ...] = _build_bearings()
 
 BY_DESIGNATION = {b.designation: b for b in BEARINGS}
 

@@ -1,0 +1,100 @@
+# Mount catalogue. Loaded and validated by zoomounter/catalogue.py.
+#
+# bolt_pattern.type carries design INTENT, not just coordinates. A NEMA
+# faceplate is dimensioned as a SQUARE spacing between hole centres, not a
+# bolt-circle diameter; feeding one to the other puts the holes at the edge
+# midpoints instead of the corners -- 6.4mm out on every hole for a NEMA 17,
+# and the plate will not bolt on. ZooMounter shipped exactly that bug. Keep
+# the type honest and the loader expands it correctly.
+
+# M3 fasteners. 3.4mm is ISO 273 "normal" clearance -- a 3.0mm hole would
+# be an interference fit on an M3 screw, not a clearance hole.
+[[mount]]
+key                  = "nema17"
+name                 = "NEMA 17 stepper motor mount"
+kind                 = "motor"
+plate_width_mm       = 42.3
+plate_height_mm      = 42.3
+bolt_hole_dia_mm     = 3.4
+center_hole_dia_mm   = 22
+shaft_dia_mm         = 5
+typical_mass_kg      = 0.28
+body_cg_offset_mm    = 20
+max_axial_n          = 10
+max_radial_n         = 28
+load_limit_source    = "ATO NEMA 17 (42mm) datasheet: Axial Max. Load 10N, Radial Max. Load 28N"
+
+[mount.bolt_pattern]
+type = "square"
+spacing_mm = 31
+
+# CONTESTED FIGURE -- read before changing max_axial_n.
+#
+# Two reputable vendors publish the numeral "15" for NEMA 23 axial load in
+# DIFFERENT UNITS, a 4.45x disagreement:
+#   ATO NEMA 23 (56mm) datasheet ....... Axial Max. Load  15 N
+#   Same Sky NEMA23-AMT112S datasheet .. max axial load   15 lb (66.7 N)
+#
+# We take the conservative 15 N. An earlier revision hardcoded 67 N for
+# every motor, which is the Same Sky figure with the unit assumed -- exactly
+# how the NEMA bolt-pattern bug happened.
+[[mount]]
+key                  = "nema23"
+name                 = "NEMA 23 stepper motor mount"
+kind                 = "motor"
+plate_width_mm       = 56.4
+plate_height_mm      = 56.4
+bolt_hole_dia_mm     = 5.5
+center_hole_dia_mm   = 38.1
+shaft_dia_mm         = 8
+typical_mass_kg      = 0.7
+body_cg_offset_mm    = 28
+max_axial_n          = 15
+max_radial_n         = 75
+load_limit_source    = "ATO NEMA 23 (56mm) datasheet: Axial Max. Load 15N, Radial Max. Load 75N (conservative; Same Sky NEMA23-AMT112S publishes 15 lb = 66.7N axial)"
+
+[mount.bolt_pattern]
+type = "square"
+spacing_mm = 47.14
+
+# v1 models the centre feature as a plain through-bore at the bearing OD.
+# A real pillow block needs a shouldered pocket to capture the bearing.
+[[mount]]
+key                  = "bearing_608"
+name                 = "608 bearing (skate bearing) pillow mount"
+kind                 = "bearing"
+plate_width_mm       = 40
+plate_height_mm      = 40
+bolt_hole_dia_mm     = 3.4
+center_hole_dia_mm   = 22
+shaft_dia_mm         = 8
+
+[mount.bolt_pattern]
+type = "circular"
+count = 4
+circle_dia_mm = 34
+
+[[mount]]
+key                  = "raspberry_pi"
+name                 = "Raspberry Pi mounting plate (Model B+/2/3/4 hole pattern)"
+kind                 = "board"
+plate_width_mm       = 65
+plate_height_mm      = 56
+bolt_hole_dia_mm     = 2.7
+
+[mount.bolt_pattern]
+type = "rectangular"
+x_spacing_mm = 58
+y_spacing_mm = 49
+
+[[mount]]
+key                  = "vesa_75"
+name                 = "VESA 75 mount (screen/panel bracket)"
+kind                 = "flange"
+plate_width_mm       = 90
+plate_height_mm      = 90
+bolt_hole_dia_mm     = 4.3
+
+[mount.bolt_pattern]
+type = "square"
+spacing_mm = 75

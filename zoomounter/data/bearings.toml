@@ -1,0 +1,136 @@
+# Bearing catalogue. Loaded and validated by zoomounter/catalogue.py.
+#
+# Every row needs a `source`. The loader rejects the file otherwise, and
+# also rejects a thrust row whose static rating falls below its dynamic
+# one -- that pattern is how a unit mix-up shows up, and it is why F5-10M
+# is not here.
+
+[[bearing]]
+designation  = "625"
+kind         = "radial"
+bore_mm      = 5
+od_mm        = 16
+width_mm     = 5
+static_c0_n  = 380
+dynamic_c_n  = 1100
+source       = "SKF catalogue (bearingsize.info)"
+
+[[bearing]]
+designation  = "626"
+kind         = "radial"
+bore_mm      = 6
+od_mm        = 19
+width_mm     = 6
+static_c0_n  = 950
+dynamic_c_n  = 2300
+source       = "SKF catalogue (bearingsize.info)"
+
+[[bearing]]
+designation  = "608"
+kind         = "radial"
+bore_mm      = 8
+od_mm        = 22
+width_mm     = 7
+static_c0_n  = 1370
+dynamic_c_n  = 3450
+source       = "SKF catalogue (bearingsize.info)"
+
+[[bearing]]
+designation  = "6000"
+kind         = "radial"
+bore_mm      = 10
+od_mm        = 26
+width_mm     = 8
+static_c0_n  = 1960
+dynamic_c_n  = 4750
+source       = "SKF catalogue (bearingsize.info)"
+
+[[bearing]]
+designation  = "6001"
+kind         = "radial"
+bore_mm      = 12
+od_mm        = 28
+width_mm     = 8
+static_c0_n  = 2360
+dynamic_c_n  = 5400
+source       = "SKF catalogue (bearingsize.info)"
+
+[[bearing]]
+designation  = "6002"
+kind         = "radial"
+bore_mm      = 15
+od_mm        = 32
+width_mm     = 9
+static_c0_n  = 2850
+dynamic_c_n  = 5850
+source       = "SKF catalogue (bearingsize.info)"
+
+[[bearing]]
+designation  = "6004"
+kind         = "radial"
+bore_mm      = 20
+od_mm        = 42
+width_mm     = 12
+static_c0_n  = 5000
+dynamic_c_n  = 10000
+source       = "SKF catalogue (bearingsize.info)"
+
+[[bearing]]
+designation  = "F5-12M"
+kind         = "thrust"
+bore_mm      = 5
+od_mm        = 12
+width_mm     = 4
+static_c0_n  = 1240
+dynamic_c_n  = 1060
+source       = "Auburn Bearing & Manufacturing, F-series miniature thrust catalogue"
+
+[[bearing]]
+designation  = "F6-12M"
+kind         = "thrust"
+bore_mm      = 6
+od_mm        = 12
+width_mm     = 4.5
+static_c0_n  = 2220
+dynamic_c_n  = 1820
+source       = "Auburn Bearing & Manufacturing, F-series miniature thrust catalogue"
+
+[[bearing]]
+designation  = "F8-16M"
+kind         = "thrust"
+bore_mm      = 8
+od_mm        = 16
+width_mm     = 5
+static_c0_n  = 4990
+dynamic_c_n  = 3920
+source       = "Auburn Bearing & Manufacturing, F-series miniature thrust catalogue"
+
+[[bearing]]
+designation  = "51100"
+kind         = "thrust"
+bore_mm      = 10
+od_mm        = 24
+width_mm     = 9
+static_c0_n  = 14000
+dynamic_c_n  = 10100
+source       = "NSK catalogue (bearingsize.info)"
+
+[[bearing]]
+designation  = "51101"
+kind         = "thrust"
+bore_mm      = 12
+od_mm        = 26
+width_mm     = 9
+static_c0_n  = 16600
+dynamic_c_n  = 10400
+source       = "SKF catalogue (bearingsize.info)"
+
+[[bearing]]
+designation  = "51102"
+kind         = "thrust"
+bore_mm      = 15
+od_mm        = 28
+width_mm     = 9
+static_c0_n  = 16800
+dynamic_c_n  = 10600
+source       = "NSK catalogue (bearingsize.info)"

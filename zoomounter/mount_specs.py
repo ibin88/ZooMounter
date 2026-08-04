@@ -59,6 +59,22 @@ def square_bolt_pattern(spacing_mm: float) -> tuple[tuple[float, float], ...]:
     )
 
 
+def rectangular_bolt_pattern(x_spacing_mm: float, y_spacing_mm: float) -> tuple[tuple[float, float], ...]:
+    """Four holes at the corners of a rectangle, centred on the origin.
+
+    Distinct from square_bolt_pattern because boards are not square: a
+    Raspberry Pi is 58mm across and 49mm deep between hole centres, and
+    collapsing that to one number is the same class of mistake as treating a
+    square spacing as a bolt circle."""
+    hx, hy = x_spacing_mm / 2, y_spacing_mm / 2
+    return (
+        (round(hx, 4), round(hy, 4)),
+        (round(hx, 4), round(-hy, 4)),
+        (round(-hx, 4), round(-hy, 4)),
+        (round(-hx, 4), round(hy, 4)),
+    )
+
+
 @dataclass(frozen=True)
 class MountSpec:
     name: str
@@ -123,98 +139,41 @@ class MountSpec:
         return (net_area - seat_area) * thickness_mm
 
 
-MOUNTS: dict[str, MountSpec] = {
-    "nema17": MountSpec(
-        name="NEMA 17 stepper motor mount",
-        kind="motor",
-        plate_width_mm=42.3,
-        plate_height_mm=42.3,
-        # M3 fasteners. 3.4mm is ISO 273 "normal" clearance -- a 3.0mm hole
-        # would be an interference fit on an M3 screw, not a clearance hole.
-        bolt_hole_dia_mm=3.4,
-        # 31mm SQUARE spacing (NEMA standard), not a bolt circle. See
-        # square_bolt_pattern() for why that distinction matters.
-        hole_positions=square_bolt_pattern(31.0),
-        center_hole_dia_mm=22.0,
-        typical_mass_kg=0.28,  # representative mid-length NEMA17 (~40mm body); varies ~0.2-0.4kg by length
-        shaft_load_offset_mm=15.0,
-        body_cg_offset_mm=20.0,
-        max_axial_n=10.0,
-        max_radial_n=28.0,
-        load_limit_source=(
-            "ATO NEMA 17 (42mm) datasheet: Axial Max. Load 10N, Radial Max. Load 28N"
-        ),
-        shaft_dia_mm=5.0,  # ATO NEMA 17 (42mm) datasheet: Shaft Diameter 5mm
-    ),
-    "nema23": MountSpec(
-        name="NEMA 23 stepper motor mount",
-        kind="motor",
-        plate_width_mm=56.4,
-        plate_height_mm=56.4,
-        bolt_hole_dia_mm=5.5,  # M5 fasteners, ISO 273 normal clearance
-        hole_positions=square_bolt_pattern(47.14),  # 47.14mm square spacing, not a bolt circle
-        center_hole_dia_mm=38.1,
-        typical_mass_kg=0.7,  # representative mid-length NEMA23 (~56mm body); varies ~0.5-1.0kg by length
-        shaft_load_offset_mm=15.0,
-        body_cg_offset_mm=28.0,
-        # CONTESTED FIGURE -- read this before changing it.
-        #
-        # Two reputable vendors publish the numeral "15" for NEMA 23 axial load
-        # in DIFFERENT UNITS, a 4.45x disagreement:
-        #   ATO NEMA 23 (56mm) datasheet ....... Axial Max. Load  15 N
-        #   Same Sky NEMA23-AMT112S datasheet .. max axial load   15 lb (66.7 N)
-        #
-        # We take the conservative 15 N. An earlier revision hardcoded 67 N for
-        # every motor, which is the Same Sky figure with the unit assumed --
-        # exactly how the NEMA bolt-pattern bug happened. If your motor's own
-        # datasheet says otherwise, that datasheet wins; override this field.
-        max_axial_n=15.0,
-        max_radial_n=75.0,
-        load_limit_source=(
-            "ATO NEMA 23 (56mm) datasheet: Axial Max. Load 15N, Radial Max. Load 75N "
-            "(conservative; Same Sky NEMA23-AMT112S publishes 15 lb = 66.7N axial)"
-        ),
-        # ATO NEMA 23 (56mm) datasheet lists "8mm/ 6.35mm". 8mm is the figure
-        # given on every individual variant page, so that is the default; a
-        # 6.35mm (1/4") shaft needs it passed explicitly.
-        shaft_dia_mm=8.0,
-    ),
-    "bearing_608": MountSpec(
-        name="608 bearing (skate bearing) pillow mount",
-        kind="bearing",
-        plate_width_mm=40.0,
-        plate_height_mm=40.0,
-        # M3 normal clearance (ISO 273). Was 3.0mm, which is smaller than an M3
-        # screw -- the same interference bug that was fixed on the NEMA mounts,
-        # missed here because the regression test only covered NEMA.
-        bolt_hole_dia_mm=3.4,
-        # Unlike NEMA, a 608 pillow mount has no published bolt pattern -- this
-        # is a chosen 34mm bolt circle, and genuinely circular, so
-        # circular_bolt_pattern is correct here rather than square_bolt_pattern.
-        hole_positions=circular_bolt_pattern(4, 34.0),
-        center_hole_dia_mm=22.0,  # bearing OD -- see module docstring
-        shaft_dia_mm=8.0,  # a 608 takes an 8mm shaft
-    ),
-    "raspberry_pi": MountSpec(
-        name="Raspberry Pi mounting plate (Model B+/2/3/4 hole pattern)",
-        kind="board",
-        plate_width_mm=65.0,
-        plate_height_mm=56.0,
-        bolt_hole_dia_mm=2.7,
-        hole_positions=((-29.0, -24.5), (29.0, -24.5), (-29.0, 24.5), (29.0, 24.5)),  # 58mm x 49mm spacing
-        center_hole_dia_mm=0,
-    ),
-    "vesa_75": MountSpec(
-        name="VESA 75 mount (screen/panel bracket)",
-        kind="flange",
-        plate_width_mm=90.0,
-        plate_height_mm=90.0,
-        bolt_hole_dia_mm=4.3,  # M4 clearance
-        hole_positions=((-37.5, -37.5), (37.5, -37.5), (-37.5, 37.5), (37.5, 37.5)),
-        center_hole_dia_mm=0,
-    ),
-}
+def _build_mounts() -> dict[str, MountSpec]:
+    """Build the mount table from data/mounts.toml.
 
+    Validation happens in catalogue.load_mounts(), which raises rather than
+    returning a half-trusted row. A malformed catalogue stops the import: a
+    tool whose whole claim is "the geometry matches the spec" has no business
+    running on a spec it could not check.
+    """
+    from .catalogue import expand_bolt_pattern, load_mounts
+
+    built: dict[str, MountSpec] = {}
+    for row in load_mounts():
+        key = row["key"]
+        built[key] = MountSpec(
+            name=row["name"],
+            kind=row["kind"],
+            plate_width_mm=row["plate_width_mm"],
+            plate_height_mm=row["plate_height_mm"],
+            bolt_hole_dia_mm=row["bolt_hole_dia_mm"],
+            hole_positions=expand_bolt_pattern(
+                row["bolt_pattern"], f"mounts.toml [{key}]"
+            ),
+            center_hole_dia_mm=row.get("center_hole_dia_mm", 0),
+            typical_mass_kg=row.get("typical_mass_kg", 0),
+            shaft_load_offset_mm=row.get("shaft_load_offset_mm", 15.0),
+            body_cg_offset_mm=row.get("body_cg_offset_mm", 0),
+            max_axial_n=row.get("max_axial_n"),
+            max_radial_n=row.get("max_radial_n"),
+            load_limit_source=row.get("load_limit_source", ""),
+            shaft_dia_mm=row.get("shaft_dia_mm", 0),
+        )
+    return built
+
+
+MOUNTS: dict[str, MountSpec] = _build_mounts()
 
 def get_mount(
     name: str,
