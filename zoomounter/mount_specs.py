@@ -86,6 +86,19 @@ class MountSpec:
     max_radial_n: float | None = None
     load_limit_source: str = ""  # primary source for the two figures above
 
+    # The SHAFT diameter, which is not center_hole_dia_mm. On a NEMA 17 the
+    # centre hole is 22mm because that is the pilot boss the plate registers
+    # on; the shaft running through it is 5mm. Bearing selection needs the
+    # shaft, so confusing the two would pick a bearing four sizes too big.
+    shaft_dia_mm: float = 0  # 0 = unknown, which blocks bearing selection
+
+    # Bearing seat, filled in by bearings.apply_bearing(). Kept as plain
+    # scalars so mount_specs stays a leaf module with no imports of its own.
+    bearing_designation: str = ""
+    bearing_seat_dia_mm: float = 0  # bearing OD; the plate is bored to this
+    bearing_seat_depth_mm: float = 0  # 0 = through-bore, >0 = blind counterbore
+    bearing_width_mm: float = 0  # how much plate the bearing needs to sit in
+
     def estimate_volume_mm3(self, thickness_mm: float) -> float:
         """Solid plate volume minus all holes -- used to sanity-check the
         Agent API's generated geometry against a hand calc before we ever
@@ -96,7 +109,18 @@ class MountSpec:
         host_hole_area = sum(math.pi * (dia / 2) ** 2 for _, _, dia in self.host_holes)
         host_slot_area = sum(length * width for _, _, length, width, _ in self.host_slots) # rough rect area
         net_area = plate_area - center_area - bolt_hole_area - host_hole_area - host_slot_area
-        return net_area * thickness_mm
+
+        seat_area = math.pi * (self.bearing_seat_dia_mm / 2) ** 2
+        if self.bearing_seat_depth_mm > 0:
+            # Blind counterbore: removes material only to its own depth, and
+            # the shaft hole already counted in center_area runs through the
+            # rest. Subtracting the full-thickness column here would
+            # double-count and under-report the part by the shaft volume.
+            annulus = max(seat_area - center_area, 0.0)
+            depth = min(self.bearing_seat_depth_mm, thickness_mm)
+            return net_area * thickness_mm - annulus * depth
+        # Through-bore: the seat is a hole like any other.
+        return (net_area - seat_area) * thickness_mm
 
 
 MOUNTS: dict[str, MountSpec] = {
@@ -120,6 +144,7 @@ MOUNTS: dict[str, MountSpec] = {
         load_limit_source=(
             "ATO NEMA 17 (42mm) datasheet: Axial Max. Load 10N, Radial Max. Load 28N"
         ),
+        shaft_dia_mm=5.0,  # ATO NEMA 17 (42mm) datasheet: Shaft Diameter 5mm
     ),
     "nema23": MountSpec(
         name="NEMA 23 stepper motor mount",
@@ -149,6 +174,10 @@ MOUNTS: dict[str, MountSpec] = {
             "ATO NEMA 23 (56mm) datasheet: Axial Max. Load 15N, Radial Max. Load 75N "
             "(conservative; Same Sky NEMA23-AMT112S publishes 15 lb = 66.7N axial)"
         ),
+        # ATO NEMA 23 (56mm) datasheet lists "8mm/ 6.35mm". 8mm is the figure
+        # given on every individual variant page, so that is the default; a
+        # 6.35mm (1/4") shaft needs it passed explicitly.
+        shaft_dia_mm=8.0,
     ),
     "bearing_608": MountSpec(
         name="608 bearing (skate bearing) pillow mount",
@@ -164,6 +193,7 @@ MOUNTS: dict[str, MountSpec] = {
         # circular_bolt_pattern is correct here rather than square_bolt_pattern.
         hole_positions=circular_bolt_pattern(4, 34.0),
         center_hole_dia_mm=22.0,  # bearing OD -- see module docstring
+        shaft_dia_mm=8.0,  # a 608 takes an 8mm shaft
     ),
     "raspberry_pi": MountSpec(
         name="Raspberry Pi mounting plate (Model B+/2/3/4 hole pattern)",

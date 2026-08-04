@@ -134,6 +134,11 @@ def _fastener_capacity_n(hole_dia_mm: float, bolt_count: int, safety_factor: flo
 # Stable code for the check that compares an applied load against the
 # component's own published shaft rating.
 COMPONENT_LOAD_LIMIT = "component_load_limit"
+BEARING_SEAT_GOVERNS = "bearing_seat_governs"
+
+# Material left under a blind counterbore so the seat has a floor to press
+# against rather than opening into a through-hole.
+BEARING_SEAT_FLOOR_MM = 2.0
 
 _LOAD_LIMIT_REMEDY = {
     "axial": (
@@ -311,8 +316,36 @@ def required_thickness(
         "deflection limit (arm/300)": t_deflection,
         f"process minimum wall ({material.process})": min_wall,
     }
+
+    # A plate that cannot hold the bearing is not a lighter plate, it is a
+    # different part. Sizing to the structural answer and then cutting a 9mm
+    # counterbore into a 1mm plate produces geometry that cannot exist, so
+    # the seat depth belongs here alongside the process floor rather than as
+    # a warning issued after the number is already fixed.
+    if mount.bearing_width_mm > 0:
+        if mount.bearing_seat_depth_mm > 0:
+            seat_min = mount.bearing_seat_depth_mm + BEARING_SEAT_FLOOR_MM
+            label = f"bearing seat ({mount.bearing_designation} counterbore + floor)"
+        else:
+            seat_min = mount.bearing_width_mm
+            label = f"bearing seat ({mount.bearing_designation} outer-ring width)"
+        candidates[label] = seat_min
     governing_limit = max(candidates, key=lambda k: candidates[k])
     required = candidates[governing_limit]
+
+    if governing_limit.startswith("bearing seat"):
+        notes.append(
+            Check(
+                level="INFO",
+                message=(
+                    f"Plate thickness is set by the bearing, not by the load: "
+                    f"the {mount.bearing_designation} needs {required:.2f}mm of plate to "
+                    f"seat in. The structural requirement here was "
+                    f"{max(t_stress, t_deflection, min_wall):.2f}mm."
+                ),
+                code=BEARING_SEAT_GOVERNS,
+            )
+        )
 
     if governing_limit.startswith("process minimum"):
         notes.append(

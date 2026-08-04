@@ -148,6 +148,12 @@ def expected_holes(mount: MountSpec) -> list[tuple[float, float, float]]:
     holes = [(x, y, mount.bolt_hole_dia_mm) for x, y in mount.hole_positions]
     if mount.center_hole_dia_mm > 0:
         holes.append((0.0, 0.0, mount.center_hole_dia_mm))
+    # The bearing seat. On a thrust block this is a blind counterbore
+    # concentric with the shaft hole, so the STEP carries two circles at the
+    # origin -- the probe in probes/results/counterbore confirmed the API
+    # emits both, which is what makes this checkable.
+    if mount.bearing_seat_dia_mm > 0:
+        holes.append((0.0, 0.0, mount.bearing_seat_dia_mm))
         
     for x, y, dia in mount.host_holes:
         holes.append((x, y, dia))

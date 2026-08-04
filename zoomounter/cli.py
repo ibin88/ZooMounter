@@ -40,7 +40,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="zoomounter",
         description="Generate a mechanical mount from an engineering spec, then verify it against Zoo's File Format API.",
     )
-    p.add_argument("--mount", choices=[*MOUNTS.keys(), "custom"], help="Mount type")
+    p.add_argument("--mount", choices=[*MOUNTS.keys(), "bearing", "custom"], help="Mount type. 'bearing' generates a bearing block sized around a bearing chosen from the load case.")
     p.add_argument("--material", choices=[*MATERIALS.keys(), "custom"], help="Plate material")
     p.add_argument("--load-n", type=float, help="Expected load on the mount, in newtons")
     p.add_argument(
@@ -89,6 +89,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Drop the mount straight into the Zoo project you're standing in: writes PART_NAME.kcl "
         "alongside your other parts and adds the import to main.kcl. Finds the project by walking up "
         "from the current directory, so no paths needed. e.g. --add xMotorMount",
+    )
+
+    bearing_group = p.add_argument_group("--mount bearing options")
+    bearing_group.add_argument(
+        "--shaft-dia-mm", type=float, default=None,
+        help="Shaft the bearing must take. Defaults to the shaft on the named mount (NEMA 17 = 5mm, NEMA 23 = 8mm). Not the same as the centre hole, which clears the motor's pilot boss.",
+    )
+    bearing_group.add_argument(
+        "--bearing", default=None,
+        help="Force a specific bearing by designation (e.g. 608, 51101) instead of selecting one from the load case. A mismatch with the load type is warned about, not silently accepted.",
     )
 
     custom_mount = p.add_argument_group("--mount custom options")
@@ -481,14 +491,39 @@ def main(argv: list[str] | None = None) -> int:
     fill_in_interactively(args)
 
     try:
-        mount = get_mount(
-            args.mount,
-            plate_width_mm=args.plate_width_mm,
-            bolt_count=args.bolt_count,
-            bolt_circle_dia_mm=args.bolt_circle_dia_mm,
-            bolt_hole_dia_mm=args.bolt_hole_dia_mm,
-            center_hole_dia_mm=args.center_hole_dia_mm or 0,
-        )
+        bearing_selection = None
+        if args.mount == "bearing":
+            from . import bearings
+            shaft = args.shaft_dia_mm
+            if shaft is None:
+                console.print(
+                    "[red]error:[/red] --mount bearing needs --shaft-dia-mm "
+                    "(the shaft the bearing carries, not the plate's centre hole)."
+                )
+                return 2
+            mount, bearing_selection = bearings.auto_bearing_mount(
+                load_type=args.load_type,
+                load_n=args.load_n,
+                shaft_dia_mm=shaft,
+                safety_factor=args.safety_factor,
+                designation=args.bearing,
+            )
+            if mount is None:
+                console.print("[red]No bearing fits this case.[/red]")
+                for n in bearing_selection.notes:
+                    console.print(f"  [{n.level}] {n.message}")
+                    if n.remedy:
+                        console.print(f"    [dim]Remedy: {n.remedy}[/dim]")
+                return 1
+        else:
+            mount = get_mount(
+                args.mount,
+                plate_width_mm=args.plate_width_mm,
+                bolt_count=args.bolt_count,
+                bolt_circle_dia_mm=args.bolt_circle_dia_mm,
+                bolt_hole_dia_mm=args.bolt_hole_dia_mm,
+                center_hole_dia_mm=args.center_hole_dia_mm or 0,
+            )
         
         from .mount_specs import apply_host_mount
         mount = apply_host_mount(
@@ -516,6 +551,19 @@ def main(argv: list[str] | None = None) -> int:
         lever_arm_mm=args.overhang_mm,
         load_type=args.load_type,
     )
+    if bearing_selection is not None and bearing_selection.bearing is not None:
+        from . import bearings as _b
+        # Appended to thickness.notes so they travel through the existing
+        # console summary and the markdown report with no extra plumbing.
+        thickness.notes.extend(bearing_selection.notes)
+        thickness.notes.append(
+            _b.check_seat_depth(
+                bearing_selection.bearing,
+                thickness.required_thickness_mm,
+                args.load_type,
+            )
+        )
+
     console.print()
     print_spec_summary(mount, material, args, thickness)
 

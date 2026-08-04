@@ -30,6 +30,29 @@ class GenerationError(RuntimeError):
     pass
 
 
+def _seat_clause(mount: MountSpec) -> str:
+    """Describe the bearing seat in words the Agent API builds accurately.
+
+    Two shapes, because the load case needs two different bearings: a radial
+    block gets a plain through-bore at the outer-ring diameter, a thrust block
+    gets a blind counterbore with the shaft passing through the floor of it.
+    Both feature types were verified against the live API in probes/."""
+    if mount.bearing_seat_dia_mm <= 0:
+        return ""
+    if mount.bearing_seat_depth_mm > 0:
+        return (
+            f" It has a {_fmt(mount.bearing_seat_dia_mm)}mm diameter counterbore "
+            f"{_fmt(mount.bearing_seat_depth_mm)}mm deep, centered on the plate and "
+            f"opening from the top face, to seat a {mount.bearing_designation} "
+            f"thrust bearing."
+        )
+    return (
+        f" It has a {_fmt(mount.bearing_seat_dia_mm)}mm diameter through-hole "
+        f"centered on the plate, sized to seat a {mount.bearing_designation} "
+        f"bearing."
+    )
+
+
 def build_prompt(mount: MountSpec, material: Material, thickness_mm: float) -> str:
     """Turn a fully-solved engineering spec into an unambiguous, numbers-only
     prompt for the Agent API. Every dimension is stated explicitly -- holes
@@ -61,7 +84,13 @@ def build_prompt(mount: MountSpec, material: Material, thickness_mm: float) -> s
         host_s_list = "; ".join(f"({x}mm, {y}mm) with length {l}mm along {dir_char}-axis and width {w}mm" for x, y, l, w, dir_char in mount.host_slots)
         prompt += f" It also has {len(mount.host_slots)} adjustment slots centered at: {host_s_list}."
 
-    prompt += " All holes and slots go through the full thickness of the plate."
+    prompt += _seat_clause(mount)
+    prompt += (
+        " All holes and slots go through the full thickness of the plate, "
+        "except any counterbore, which is blind to its stated depth."
+        if mount.bearing_seat_depth_mm > 0
+        else " All holes and slots go through the full thickness of the plate."
+    )
     return prompt
 
 
@@ -165,6 +194,11 @@ def build_parameter_scheme(mount: MountSpec, thickness_mm: float) -> ParameterSc
         rel["plateWidth"] = ["slotSpacing", "edgeMargin"]
     else:
         decl.append(("plateWidth", f"{_fmt(mount.plate_width_mm)}mm"))
+
+    if mount.bearing_seat_dia_mm > 0:
+        decl.append(("bearingSeatDia", f"{_fmt(mount.bearing_seat_dia_mm)}mm"))
+        if mount.bearing_seat_depth_mm > 0:
+            decl.append(("bearingSeatDepth", f"{_fmt(mount.bearing_seat_depth_mm)}mm"))
 
     return ParameterScheme(declarations=decl, relations=rel)
 
