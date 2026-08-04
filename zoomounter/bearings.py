@@ -22,6 +22,12 @@ seated in a counterbore on the plate face with the shaft passing through.
 Deep groove bearings take some axial load but are not the right part for
 sustained thrust, and a stepper's own bearings are far worse.
 
+Thrust covers two families: the miniature F-series from a 5mm bore, and the
+standard 511xx metric series from 10mm. Both are needed. Holding only the
+511xx made the tool refuse every thrust bearing on a NEMA 17 shaft and
+announce that none existed, which was a statement about the table, not about
+bearings.
+
 ## What is checked, and what is deliberately not
 
 Selection compares the load against the **basic static load rating C0**, not
@@ -53,6 +59,7 @@ THRUST = "thrust"
 
 _SKF = "SKF catalogue (bearingsize.info)"
 _NSK = "NSK catalogue (bearingsize.info)"
+_AUBURN = "Auburn Bearing & Manufacturing, F-series miniature thrust catalogue"
 
 
 @dataclass(frozen=True)
@@ -72,11 +79,25 @@ class Bearing:
 
 
 # Deep groove ball bearings -- radial. Ordered by bore.
-# Axial deep groove (thrust) ball bearings -- 511xx series.
 #
-# Note the thrust series starts at a 10mm bore, which is already larger than a
-# NEMA 17's 5mm shaft. That is a real constraint, not a gap in the table, and
-# select_bearing() reports it rather than pretending otherwise.
+# Thrust comes in two families, and having only one of them was a real bug.
+# An earlier version of this table held only the 511xx metric series, which
+# starts at a 10mm bore, and so refused to fit any thrust bearing to a NEMA
+# 17's 5mm shaft. The tool reported that as "no thrust bearing fits a 5mm
+# shaft". It is not true: the miniature F-series goes down to a 5mm bore and
+# is exactly what small mechatronics uses. The table was the limit, and it
+# got described as though it were physics.
+#
+#   511xx  standard metric thrust ball bearings, 10mm bore and up
+#   Fx-yyM miniature thrust ball bearings, 5mm bore and up, 3-piece separable
+#
+# F-series figures are Auburn Bearing's published ratings, taken from one
+# manufacturer across all three sizes so the numbers share a basis. F5-10M is
+# deliberately absent: it is the most widely sold of the family, but the
+# ratings published for it run dynamic 950N / static 830N -- dynamic above
+# static, backwards from every other thrust bearing here and from Auburn's own
+# F5-12M. Rather than import a row that contradicts the rest of the table, it
+# is left out until the figure can be confirmed from a primary source.
 BEARINGS: tuple[Bearing, ...] = (
     Bearing("625", RADIAL, 5, 16, 5, 380, 1100, _SKF),
     Bearing("626", RADIAL, 6, 19, 6, 950, 2300, _SKF),
@@ -85,6 +106,9 @@ BEARINGS: tuple[Bearing, ...] = (
     Bearing("6001", RADIAL, 12, 28, 8, 2360, 5400, _SKF),
     Bearing("6002", RADIAL, 15, 32, 9, 2850, 5850, _SKF),
     Bearing("6004", RADIAL, 20, 42, 12, 5000, 10000, _SKF),
+    Bearing("F5-12M", THRUST, 5, 12, 4, 1240, 1060, _AUBURN),
+    Bearing("F6-12M", THRUST, 6, 12, 4.5, 2220, 1820, _AUBURN),
+    Bearing("F8-16M", THRUST, 8, 16, 5, 4990, 3920, _AUBURN),
     Bearing("51100", THRUST, 10, 24, 9, 14000, 10100, _NSK),
     Bearing("51101", THRUST, 12, 26, 9, 16600, 10400, _SKF),
     Bearing("51102", THRUST, 15, 28, 9, 16800, 10600, _NSK),

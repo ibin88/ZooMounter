@@ -60,6 +60,19 @@ def test_dimensions_are_physically_ordered(b):
     assert b.static_c0_n > 0 and b.dynamic_c_n > 0
 
 
+@pytest.mark.parametrize(
+    "b", [b for b in BEARINGS if b.kind == THRUST], ids=lambda b: b.designation
+)
+def test_thrust_static_rating_is_at_least_its_dynamic_rating(b):
+    """True of every thrust bearing here and of the physics -- static
+    capacity exceeds dynamic. A row that violates it is a transcription
+    error or a unit mix-up, which is why F5-10M is not in the table despite
+    being the most commonly sold of its family."""
+    assert b.static_c0_n >= b.dynamic_c_n, (
+        f"{b.designation}: static {b.static_c0_n}N below dynamic {b.dynamic_c_n}N"
+    )
+
+
 def test_designations_are_unique():
     assert len(BY_DESIGNATION) == len(BEARINGS)
 
@@ -115,14 +128,37 @@ def test_heavier_load_on_the_same_shaft_steps_up():
 # ---------------------------------------------------------------------------
 
 
-def test_no_thrust_bearing_fits_a_nema17_shaft():
-    """The 511xx series starts at a 10mm bore; a NEMA 17 shaft is 5mm. The
-    tool must say so rather than fitting something four sizes too big."""
+def test_five_mm_shaft_does_get_a_thrust_bearing():
+    """Regression, and it was a real one. The table originally held only the
+    511xx series, which starts at a 10mm bore, so the tool refused every
+    thrust bearing on a 5mm shaft and reported "no thrust bearing fits". That
+    was a fact about the table being short a family, not about bearings --
+    miniature F-series thrust bearings go down to a 5mm bore and are what
+    small mechatronics actually uses.
+
+    Caught by someone who had built a mechanism using exactly this part."""
     sel = select_bearing("axial", 120, 5.0, 2.0)
+    assert sel.bearing is not None, "a 5mm-bore thrust bearing exists"
+    assert sel.bearing.bore_mm == 5.0
+    assert _codes(sel.notes, BEARING_FIT)[0].level == "PASS"
+
+
+def test_thrust_bearings_cover_small_shafts_continuously():
+    """No gaps between 5mm and the 511xx series -- a gap would produce the
+    same false refusal somewhere else."""
+    for shaft in (5.0, 6.0, 8.0, 10.0, 12.0, 15.0):
+        sel = select_bearing("axial", 100, shaft, 2.0)
+        assert sel.bearing is not None, f"no thrust bearing for a {shaft}mm shaft"
+        assert sel.bearing.bore_mm == shaft, (
+            f"{shaft}mm shaft got a {sel.bearing.bore_mm}mm bore -- exact sizes exist"
+        )
+
+
+def test_a_shaft_larger_than_the_whole_table_is_refused():
+    """Refusal still has to be reachable, just for a real reason."""
+    sel = select_bearing("axial", 100, 25.0, 2.0)
     assert sel.bearing is None
-    note = _codes(sel.notes, BEARING_SELECTION)[0]
-    assert note.level == "LOUD WARN"
-    assert "51100" in note.message and "10mm" in note.message
+    assert _codes(sel.notes, BEARING_SELECTION)[0].level == "LOUD WARN"
 
 
 def test_overload_refuses_and_names_the_strongest_option():
@@ -140,13 +176,13 @@ def test_unknown_shaft_blocks_selection():
 
 
 def test_oversized_bore_is_offered_but_warned_about():
-    """An 8mm shaft in a 10mm-bore thrust bearing is the only option, so it is
-    offered -- loudly. Silence here would be a rattling shaft."""
-    sel = select_bearing("axial", 100, 8.0, 2.0)
-    assert sel.bearing.designation == "51100"
+    """A 7mm shaft has no exact thrust bearing, so the 8mm bore is offered --
+    loudly. Silence here would be a rattling shaft."""
+    sel = select_bearing("axial", 100, 7.0, 2.0)
+    assert sel.bearing.bore_mm == 8.0
     fit = _codes(sel.notes, BEARING_FIT)[0]
     assert fit.level == "LOUD WARN"
-    assert "10mm bore" in fit.message and "8mm" in fit.message
+    assert "8mm bore" in fit.message and "7mm" in fit.message
 
 
 def test_exact_bore_match_does_not_warn():
@@ -359,7 +395,7 @@ def test_unknown_designation_is_an_error():
 
 
 def test_auto_mount_returns_none_when_nothing_fits():
-    spec, sel = auto_bearing_mount("axial", 120, 5.0, 2.0)
+    spec, sel = auto_bearing_mount("axial", 100, 25.0, 2.0)
     assert spec is None and sel.bearing is None
 
 
