@@ -237,6 +237,39 @@ severity   = "info"
 status     = "vendor-datasheet"
 remedy     = "Use standoffs on the motor's bolt pattern and a flexible coupling. A rigid coupling reintroduces the overconstraint this topology exists to avoid."
 
+# ---------------------------------------------------------------------------
+# What the application decides. These exist because the tool was asking the
+# user to pick geometry that the situation already determines.
+# ---------------------------------------------------------------------------
+
+[[rule]]
+id         = "mount_class_from_application"
+statement  = "Whether a job needs an open plate or a housing is decided by the application, not chosen: a mount that travels through a workspace shared with people, workpieces or other axes is a containment problem, and ZooMounter generates open plates only."
+applies_to = {}
+source     = "Machine guarding practice: what governs an enclosure is finger clearance, the cable path, the swept volume and collision behaviour. None of those is a plate dimension, and none is computed here."
+severity   = "loud-warn"
+status     = "derived"
+remedy     = "Design a housing around the motor and use ZooMounter's plate only as the internal mounting face inside it. Do not ship the open plate into a shared moving workspace."
+
+[[rule]]
+id         = "topology_is_derived_not_chosen"
+statement  = "The bearing topology follows from the load direction, the bearing's bore against the motor shaft, and its outside diameter against the pilot boss -- so it is derived, and a manual selection is an override rather than a design decision."
+applies_to = { kind = "motor" }
+source     = "Follows from the three constraints already recorded under topology_direct_overconstrained; this rule states that they determine the answer rather than merely commenting on it."
+severity   = "info"
+status     = "derived"
+remedy     = "Leave the topology on auto unless you have a specific reason to accept the direct arrangement's costs."
+
+[[rule]]
+id         = "dynamic_loads_unmodelled"
+statement  = "A mount that travels sees acceleration loads and cable-loom drag on every direction change, and neither is modelled."
+applies_to = {}
+source     = "Inertial loading on a moving axis scales with mass and peak acceleration, neither of which ZooMounter is told; drag-chain reaction depends on loom stiffness and routing."
+severity   = "warn"
+status     = "derived"
+evaluated  = false
+remedy     = "Add your peak acceleration load to the shaft load you pass in, and plan the cable path separately."
+
 [[rule]]
 id         = "rear_face_mounting"
 statement  = "Bolting a motor by its rear face points the shaft away from the plate, so the plate needs no shaft clearance, the load is cantilevered off it by the whole body length, and the motor must actually have rear mounting holes -- many do not."

@@ -22,7 +22,7 @@ from rich.panel import Panel
 from rich.prompt import FloatPrompt, IntPrompt, Prompt
 from rich.table import Table
 
-from . import bearings, generate, kcl_inspect, mechanics, verify, zoo_project
+from . import application, bearings, generate, kcl_inspect, mechanics, verify, zoo_project
 from .config import load_environment
 from .materials import MATERIALS, get_material
 from .mount_specs import EXTRUSION_SERIES, MOUNTS, get_mount
@@ -120,6 +120,21 @@ def build_parser() -> argparse.ArgumentParser:
         "from the current directory, so no paths needed. e.g. --add xMotorMount",
     )
 
+    app_group = p.add_argument_group("Application context (what the part has to survive)")
+    app_group.add_argument(
+        "--service", choices=list(application.SERVICES), default=application.SERVICE_FIXED,
+        help="Does the mount itself travel? 'fixed' = bolted to a frame that stays put. "
+        "'moving' = rides a gantry, carriage or arm, which adds acceleration loads and a "
+        "cable path that ZooMounter does not model but will tell you about. (default: fixed)",
+    )
+    app_group.add_argument(
+        "--workspace", choices=list(application.WORKSPACES), default=application.WORKSPACE_CLEAR,
+        help="Can anything reach the part in service? 'clear' = nothing else occupies the "
+        "volume it sweeps. 'shared' = people, workpieces or other axes can. A moving mount in "
+        "a shared workspace needs a housing, not a plate, and ZooMounter will say so rather "
+        "than hand you an open bracket. (default: clear)",
+    )
+
     asm = p.add_argument_group("Assembly options")
     asm.add_argument(
         "--mounting-face", choices=["front", "back"], default="front",
@@ -140,13 +155,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Force a specific bearing by designation (e.g. 608, 51101) instead of selecting one from the load case. A mismatch with the load type is warned about, not silently accepted.",
     )
     bearing_group.add_argument(
-        "--bearing-topology", choices=list(bearings.BEARING_TOPOLOGIES), default=None,
-        help="Put a bearing into a MOTOR mount, and say how it takes the load. "
-        "'stub-shaft' (recommended): the bearing carries its own short shaft and the motor "
-        "stands off on spacers driving it through a flexible coupling, so no side load or thrust "
-        "reaches the motor at all. 'direct': the bearing seats in the plate and runs on the "
-        "motor's own shaft -- smaller change, but overconstrained against the motor's front "
-        "bearing and near-useless for thrust, and the tool says so. Omit for a plain plate.",
+        "--bearing-topology", choices=["auto", "none", *bearings.BEARING_TOPOLOGIES],
+        default="auto",
+        help="How a bearing takes load off the motor. Default 'auto' DERIVES this from the load "
+        "case rather than asking you to pick geometry -- the answer follows from the load "
+        "direction, the bearing's bore against the shaft, and its OD against the pilot boss, "
+        "and the reasoning is printed. 'none' forces a plain plate. 'stub-shaft' and 'direct' "
+        "are manual overrides; 'direct' is reported as an override because it is never what "
+        "the derivation picks.",
     )
 
     custom_mount = p.add_argument_group("--mount custom options")
@@ -622,6 +638,7 @@ def write_report(
     decision=None,
     mount_kind: str | None = None,
     process: str | None = None,
+    class_rec=None,
 ) -> None:
     status = "PASS" if result.passed else "FAIL"
     notes_block = ""
@@ -675,8 +692,22 @@ def write_report(
             "the actual part, not an illustration of it.*\n"
         )
 
+    # The application section goes above the request, because it can say the
+    # part should not be this shape at all -- and that has to be read before
+    # the numbers, not after them.
+    class_block = ""
+    if class_rec is not None and class_rec.checks:
+        class_block = "\n## Application\n\n"
+        if not class_rec.in_scope:
+            class_block += (
+                f"> **OUT OF SCOPE.** This application needs a {class_rec.value}, "
+                f"not a plate. The part below was still generated, because this "
+                f"tool warns rather than blocks -- but read this section first.\n\n"
+            )
+        class_block += _notes_markdown(class_rec.checks)
+
     report = f"""# ZooMounter Inspection Report
-{preview_block}
+{preview_block}{class_block}
 ## Request
 - Mount: {mount_name}
 - Material: {material_name}
@@ -820,7 +851,27 @@ def main(argv: list[str] | None = None) -> int:
                 center_hole_dia_mm=args.center_hole_dia_mm or 0,
             )
 
-        if args.bearing_topology:
+        # The application decides the mount CLASS before anything is sized.
+        # A moving mount in a shared workspace needs containment, and handing
+        # back an open plate for that job would be the tool answering a
+        # question it was not asked.
+        context = application.ApplicationContext(
+            service=args.service, workspace=args.workspace
+        )
+        class_rec = application.recommend_mount_class(context)
+
+        # `auto` derives the topology. A bearing goes in when the shaft
+        # cannot take the load, which is a question already answered -- so
+        # ask it here rather than making the user pre-empt the answer.
+        topology = args.bearing_topology
+        if topology == "auto" and mount.kind == "motor":
+            probe = mechanics.shaft_support(
+                mount=mount, shaft_load_n=args.shaft_load_n,
+                load_type=args.load_type, offset_mm=args.overhang_mm,
+            )
+            topology = "derive" if probe.needs_bearing else "none"
+
+        if topology not in ("none", "auto"):
             if mount.kind != "motor":
                 console.print(
                     "[red]error:[/red] --bearing-topology puts a bearing into a "
@@ -833,7 +884,7 @@ def main(argv: list[str] | None = None) -> int:
                 load_n=args.shaft_load_n,
                 shaft_dia_mm=(
                     args.shaft_dia_mm
-                    if args.bearing_topology == bearings.TOPOLOGY_STUB_SHAFT
+                    if topology == bearings.TOPOLOGY_STUB_SHAFT
                     else mount.shaft_dia_mm
                 ) or mount.shaft_dia_mm,
                 safety_factor=args.safety_factor,
@@ -844,9 +895,22 @@ def main(argv: list[str] | None = None) -> int:
                 for n in bearing_selection.notes:
                     console.print(f"  [{n.level}] {n.message}")
                 return 1
-            mount, topology_checks = bearings.apply_bearing_topology(
-                mount, bearing_selection.bearing, args.bearing_topology, args.load_type
+
+            if topology == "derive":
+                rec = application.recommend_topology(
+                    mount, bearing_selection.bearing, args.load_type
+                )
+                topology = rec.value
+                topology_checks += rec.checks
+            elif topology == bearings.TOPOLOGY_DIRECT:
+                topology_checks += application.direct_override_checks(
+                    mount, bearing_selection.bearing, args.load_type
+                )
+
+            mount, applied = bearings.apply_bearing_topology(
+                mount, bearing_selection.bearing, topology, args.load_type
             )
+            topology_checks += applied
 
         from .mount_specs import apply_host_mount
         base_mount = mount
@@ -918,6 +982,18 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     console.print()
+    # The application decision leads, because it can put the whole job out of
+    # scope. Printing a thickness for a part this tool should not be making
+    # would be answering a question nobody asked.
+    if not class_rec.in_scope:
+        console.print(
+            f"[bold red]OUT OF SCOPE: this application needs a "
+            f"{class_rec.value}, not a plate.[/bold red]"
+        )
+    _print_checks(class_rec.checks)
+    if class_rec.checks:
+        console.print()
+
     print_spec_summary(mount, material, args, thickness, decision)
 
     scheme = None
@@ -990,6 +1066,7 @@ def main(argv: list[str] | None = None) -> int:
         report_path, mount.name, material.name, args.shaft_load_n,
         args.safety_factor, thickness, result, preview_path=preview_path,
         decision=decision, mount_kind=mount.kind, process=material.process,
+        class_rec=class_rec,
     )
 
     console.print()
