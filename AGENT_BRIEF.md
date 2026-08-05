@@ -6,14 +6,25 @@ decisions) lives one directory up, in `../HANDOFF.md`.
 
 ## What this repo does
 
-Generates mechanical mounting plates. Spec in → domain-rules layer computes bolt pattern and required
-thickness → exact numbers into Zoo's text-to-CAD Agent API → returned KCL executed to STEP via Zoo's CLI
-→ verified by parsing hole coordinates back out of the STEP file locally.
+Generates mounting plates for parts governed by a **shaft load** — motors, bearing housings, idlers,
+tensioners. Spec in → domain-rules layer answers the shaft question and computes the bolt pattern →
+exact numbers into Zoo's text-to-CAD Agent API → returned KCL executed to STEP via Zoo's CLI → verified
+by parsing hole coordinates back out of the STEP file locally.
+
+**The primary output is not a thickness.** It is whether the load exceeds what the component's shaft is
+rated for, and therefore whether it needs to bypass the motor into a bearing. Thickness is a
+manufacturing floor (process minimum wall, or bearing seat depth) and is reported as such.
 
 ## Before changing anything
 
-**Read `docs/mechanics.html`.** It is the technical reference: coordinate system, both load cases with
-worked numbers, known bugs, transmission load factors, open decisions.
+**Read `RULES.md`.** Every engineering claim the tool makes lives in `zoomounter/data/rules.toml` with a
+source and a provenance `status`. Python evaluates rules; it does not own them. If you are adding a
+claim, it goes in the registry — and if you are an AI agent, it goes in as `ai-proposed-unverified`,
+which is quarantined and cannot govern a generated part. You do not promote your own status.
+
+**`docs/mechanics.html` is history, not current behaviour.** It documents a structural load model that
+has been removed; it opens with a banner saying so. Read it for the reasoning and for two of the four
+original bugs, not for what the code does now.
 
 **Understand the failure mode this project has.** Four bugs shipped past a green test suite *and* a
 passing verifier. All were wrong domain assumptions, not broken code. The verifier compares the generated
@@ -22,9 +33,11 @@ A passing test suite here is weaker evidence than usual.
 
 ## Rules
 
-1. **Cite every domain constant.** New physical numbers (load limits, clearances, standard dimensions)
-   must carry a source. An unsourced number is indistinguishable from a wrong one — that is literally
-   how the NEMA bolt-pattern bug survived.
+1. **Cite every domain constant, and its conditions.** New physical numbers must carry a source. An
+   unsourced number is indistinguishable from a wrong one — that is literally how the NEMA bolt-pattern
+   bug survived. A citation is necessary and not sufficient: a rating must also ship with the conditions
+   it was measured under. A radial rating is a moment limit quoted at a distance, and the catalogue
+   loader rejects one without `max_radial_at_mm`.
 2. **Warn, never block.** When a check fails, the tool warns loudly and prominently — in the CLI, the
    GUI, the written report and the MCP payload — but still produces output. Locked product decision.
 3. **A warning must carry a remedy.** "You are 1.8× over the motor's axial limit" is only half an
@@ -36,11 +49,15 @@ A passing test suite here is weaker evidence than usual.
    and instant.
 6. **Preserve file formatting when editing user projects.** `zoo_project.py` reads and writes with
    `newline=''` specifically so adding one import doesn't rewrite every line of someone's file.
+7. **A `Check.code` must name a rule in `rules.toml`.** This is enforced by `tests/test_rules.py`, so a
+   message the user sees can always be traced back to a claim with a source and a status.
+8. **Deleting a calculation is a valid change.** The structural layer was removed because it never
+   governed. Do not re-add a calculation on the grounds that a tool ought to compute something.
 
 ## Commands
 
 ```bash
-python -m pytest tests/ -q                     # 24 offline tests, no API, no credits
+python -m pytest tests/ -q                     # 200 offline tests, no API, no credits
 python -m zoomounter.cli --print-prompt ...    # size + prompt only, free, no Zoo CLI needed
 python -m zoomounter.cli --no-export ...       # KCL project, skip STEP export and verification
 python -m zoomounter.cli --add NAME ...        # write into the surrounding Zoo project
@@ -54,7 +71,11 @@ python -m zoomounter.mcp_server
 |---|---|
 | `mount_specs.py` | mount table + hole-pattern helpers. **NEMA uses `square_bolt_pattern`, not circular** |
 | `materials.py` | material properties, process minimum wall thickness |
-| `mechanics.py` | the load model: thickness from stress / deflection / process floor |
+| `mechanics.py` | `shaft_support()` — the primary answer. Thickness = manufacturing floors only |
+| `rules.py` | rule registry: loads `data/rules.toml`, enforces the provenance quarantine |
+| `catalogue.py` | loads and validates `data/*.toml`; a malformed row stops the import |
+| `bearings.py` | bearing catalogue, load-driven selection, seat geometry |
+| `assembly.py` | component + mount + bearing assembly KCL |
 | `generate.py` | Agent API call, KCL project writing, STEP export, snapshot |
 | `verify.py` | three checks — hole positions, bounding box, volume |
 | `step_inspect.py` | local STEP parser: `CIRCLE → AXIS2_PLACEMENT_3D → CARTESIAN_POINT` |
@@ -78,5 +99,10 @@ python -m zoomounter.mcp_server
 
 ## Non-goals
 
-Do not add mount types, an electronics-mount generator, or load-derivation from torque/pulley geometry.
-All three were considered and cut — see `../HANDOFF.md` §5 for the reasoning.
+Do not add electronics/board/panel mounts, or load-derivation from torque/pulley geometry. Both were
+considered and cut. The Raspberry Pi and VESA rows shipped for a while anyway and were actively harmful:
+neither is governed by a shaft load, and the VESA row published neither a mass nor an offset, so the
+loader's defaults sized a monitor bracket as though the screen weighed nothing. See `../HANDOFF.md` and
+the note at the bottom of `data/mounts.toml`.
+
+Do not re-add the structural sizing layer. See `mechanics.py`'s module docstring.
