@@ -802,7 +802,7 @@ class App(ctk.CTk):
         self.deliver_buttons = []
         for col, (label, command) in enumerate((
             ("Add to project…", self._deliver_to_project),
-            ("Copy KCL", self._copy_kcl),
+            ("Copy mount KCL", self._copy_kcl),
             ("Save STEP as…", self._save_step_as),
         )):
             b = ctk.CTkButton(deliver_row, text=label, state="disabled", command=command)
@@ -863,19 +863,31 @@ class App(ctk.CTk):
         )
 
     def _copy_kcl(self) -> None:
-        """The generated KCL with its export line -- not the prompt."""
+        """The generated MOUNT with its export line -- not the prompt, and not
+        the assembly.
+
+        Labelled "Copy mount KCL" rather than "Copy KCL" because it sits next
+        to a button that delivers five files, and a button handing over a fifth
+        of that without saying so is a gap someone finds after wiring the wrong
+        thing into their machine. What it cannot do is stated here and in the
+        panel, rather than left for them to notice.
+        """
+        name = self.part_name_var.get().strip() or "zooMount"
         try:
-            kcl = deliver_mod.kcl_for_clipboard(
-                self.output_dir, self.part_name_var.get().strip() or "zooMount"
-            )
+            kcl = deliver_mod.kcl_for_clipboard(self.output_dir, name)
         except Exception as e:  # noqa: BLE001
             self.status_label.configure(text=f"Copy failed: {e}", text_color="#e05252")
             return
         self.clipboard_clear()
         self.clipboard_append(kcl)
         self.status_label.configure(
-            text="KCL copied, export line included. Paste into a Design Studio file.",
+            text=f"Mount KCL copied ({name}). Steps are in the panel below.",
             text_color="#2fa572",
+        )
+        self._set_results_text(
+            deliver_mod.paste_instructions(
+                name, has_assembly=(self.output_dir / "assembly").is_dir()
+            )
         )
 
     def _save_step_as(self) -> None:

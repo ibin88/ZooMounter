@@ -433,3 +433,38 @@ def test_the_mount_geometry_is_not_edited_only_positioned(tmp_path):
     delivered = (tmp_path / "dest" / "mMount.kcl").read_text(encoding="utf-8")
     for line in KCL.strip().splitlines():
         assert line in delivered, f"generated line lost: {line}"
+
+
+# ---------------------------------------------------------------------------
+# The clipboard path, and what it cannot carry.
+# ---------------------------------------------------------------------------
+
+
+def test_paste_instructions_say_it_is_the_mount_alone():
+    """The button sits next to one that delivers five files. Handing over a
+    fifth of that without saying so is a gap someone finds only after wiring
+    the wrong thing into their machine."""
+    text = deliver_mod.paste_instructions("xMotorMount", has_assembly=True)
+    assert "mount plate only" in text
+    assert "Add to project" in text
+
+
+def test_paste_instructions_carry_the_import_snippet():
+    """The snippet is shown in the GUI rather than left in a file nobody
+    opened -- the import line is the step people get wrong."""
+    text = deliver_mod.paste_instructions("xMotorMount")
+    assert 'import xMotorMount from "xMotorMount.kcl"' in text
+    assert "xMotorMount.kcl" in text
+
+
+def test_paste_instructions_state_the_origin_placement():
+    text = deliver_mod.paste_instructions("m")
+    assert "ORIGIN" in text
+    assert "translate(x = 0, y = 0, z = 0)" in text
+
+
+def test_paste_instructions_drop_the_assembly_note_when_there_is_none():
+    """A preview-only run with no assembly should not advertise one."""
+    text = deliver_mod.paste_instructions("m", has_assembly=False)
+    assert "Add to project" not in text
+    assert "mount plate only" in text

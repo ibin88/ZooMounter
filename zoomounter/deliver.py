@@ -588,6 +588,57 @@ def write_run_guide(run_dir: Path, checks: list[Check] | None = None) -> Path:
     return path
 
 
+def paste_instructions(name: str, has_assembly: bool = True) -> str:
+    """What to do with what was just copied, shown in the GUI rather than only
+    in a file the user has not opened.
+
+    Says plainly that this is the MOUNT ALONE. The clipboard is a single-file
+    channel and Design Studio's editor edits one file at a time, so the
+    assembly -- five files sharing a parameters file -- cannot travel this way.
+    A button that quietly hands over a fifth of the deliverable next to one
+    that hands over all of it is the kind of gap someone only notices after
+    wiring the wrong thing into their machine.
+    """
+    lines = [
+        "COPIED: the mount plate only.",
+        "",
+    ]
+    if has_assembly:
+        lines += [
+            "This run also produced a motor, a bearing and their positions.",
+            "None of that is on the clipboard -- an assembly is five files",
+            "sharing a parameters file, and the clipboard carries one.",
+            "For the whole thing, use \"Add to project...\" instead.",
+            "",
+        ]
+    lines += [
+        "-" * 58,
+        "TO USE WHAT WAS COPIED",
+        "-" * 58,
+        "",
+        f"1. In Design Studio, create a new file called  {name}.kcl",
+        "2. Paste. The export line is already in it -- that is the part",
+        "   the Agent API never writes and the import below needs.",
+        "3. Save.",
+        "4. Add these two lines to your project's main.kcl:",
+        "",
+        f'      import {name} from "{name}.kcl"',
+        "",
+        f"      {name}",
+        "",
+        "5. Reload the project.",
+        "",
+        "The part lands at the ORIGIN. ZooMounter sized and verified it but",
+        "does not know where it belongs in your machine, so position it",
+        "yourself:",
+        "",
+        f"      {name}",
+        "        |> translate(x = 0, y = 0, z = 0)",
+        "",
+    ]
+    return "\n".join(lines)
+
+
 def kcl_for_clipboard(run_dir: Path, name: str = "zooMount") -> str:
     """The mount's KCL with its export line, ready to paste into Design Studio.
 
