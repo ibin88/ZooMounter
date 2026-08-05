@@ -1,11 +1,39 @@
 # ZooMounter
 
-Generate a mounting plate from an engineering spec, then check the generated
-geometry actually matches that spec — including *where every hole ended up*,
-not just how much material came back.
+**An AI-generated number and a verified one look identical once they're
+written down.** That's not a prompting problem, and you can't test your way
+out of it — a test written from the same wrong assumption as the code will
+agree with it.
 
-Built for [Zoo's API Makeathon](https://zoo.dev) on the **Agent API** (to
-generate) and the **File Format API** (to measure).
+ZooMounter is a mount generator built on [Zoo's](https://zoo.dev) text-to-CAD
+Agent API, and it's really an argument about that: **provenance has to be a
+required field, not a review step.** Every engineering claim it makes carries
+where it came from and how far it can be trusted.
+
+The evidence is four bugs this project shipped. Not one was a coding error.
+All four were wrong or missing *numbers*, and all four passed a green test
+suite **and** a passing geometry verifier:
+
+| The bug | Why nothing caught it |
+|---|---|
+| A NEMA square bolt spacing fed to a circular bolt-circle function | 6.4 mm out on every hole. Verification compares the part to the spec table — and the table was what was wrong. |
+| One axial limit (67 N) applied to every motor | It was a NEMA 23 figure. A NEMA 17 is rated 10 N, so it passed silently at 6.7× its own limit. |
+| Two vendors publishing "15" in different units | 15 N vs 15 lb. A 4.45× disagreement, invisible in either source. |
+| A rating measured at 20 mm compared to a load applied at 15 mm | The number travelled; its conditions didn't. |
+
+[`tests/test_the_four_bugs.py`](tests/test_the_four_bugs.py) replays all four
+against the tool as it stands today and scores it: **3 of 4 are now
+structurally impossible**, 1 is documented rather than solved. The most
+important test in that file asserts a *failure* — transpose a limit from 28 N
+to 82 N, keep the citation and the units and the measurement distance, and the
+tool cheerfully flips "this destroys your motor" to "you're fine". Provenance
+constrains a number's *conditions*. It cannot tell you the number is right.
+
+Which is why the registry reports **0 of 29 rules verified against a physical
+part**. Nothing here has ever been built and loaded. The column exists so that
+gap is visible instead of assumed — see [RULES.md](RULES.md).
+
+---
 
 > **New to this?** A mounting plate is the flat bracket that bolts a motor to a
 > machine. Get its hole pattern wrong by two millimetres and the screws don't
@@ -13,6 +41,44 @@ generate) and the **File Format API** (to measure).
 > to catch. The second one it catches is subtler: a stepper's shaft can take
 > far less side load and thrust than people assume, and no amount of bracket
 > makes up for it.
+
+Built on the **Agent API** (to generate) and the **File Format API** (to
+measure). It generates a mounting plate from an engineering spec, then checks
+the geometry that comes back actually matches it — including *where every hole
+ended up*, not just how much material came back. A worked example, generated
+live and verified, is in
+[`examples/nema23-bearing-required/`](examples/nema23-bearing-required/).
+
+---
+
+## What got deleted, and why that's the point
+
+On the last day of the build this tool **lost its entire structural layer** —
+cantilever bending, an L/300 deflection limit, screw-head punching shear, and a
+fastener-tension check. All four, removed.
+
+They never governed. A NEMA 17's published radial limit is 28 N; run that
+through a beam calc on a 42 mm plate in any real material and the answer lands
+below the minimum wall the process can produce. Every time. A thickness quoted
+to two decimals from a named formula was the process floor wearing a
+calculation's clothes.
+
+Worse, they answered a question about the wrong object. A motor housing is a
+metal shell bolted to a flat plate — it is not the fragile part and never was.
+The fragile part is the **shaft**, and the small bearings inside the motor that
+support it, whose published limits are an order of magnitude below anything the
+bracket notices.
+
+So the headline output is no longer a thickness. It's a verdict:
+
+```
+BEARING REQUIRED  (axial shaft load)
+  120 N applied vs 15 N published limit — 8.0× over
+  Bearing F8-16M would carry this: rated 4990 N static against 240 N required.
+```
+
+That same case used to answer *"1.00 mm — process minimum wall"*, which reads
+as an all-clear while the motor is being destroyed.
 
 ---
 
