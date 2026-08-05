@@ -166,3 +166,107 @@ tool should say so rather than produce a thickness.
 
 Without those, `rules.toml` is just a second place to write things down, and the
 two drift. That drift is the failure mode the registry exists to end.
+
+---
+
+## Where this goes next
+
+### 1. The registry has never met reality
+
+As of 2026-08-05, all 29 rules break down like this:
+
+| Status | Count |
+|---|---|
+| `derived` — our own reasoning | 18 |
+| `standard` — ISO, NEMA | 7 |
+| `vendor-datasheet` | 4 |
+| **`verified-against-physical`** | **0** |
+
+Nothing here has ever been checked against a part that exists. Most of it is
+reasoning we did, correctly labelled as ours — which is the honest state, not a
+good one.
+
+**This is the highest-value work remaining, and it is not more rules.** It is
+building one bracket, loading it, and promoting the handful of rules that
+survive. A registry that tracks its own epistemic state and reports it
+unflatteringly is doing the thing this project claims to do; a registry that
+never moves a rule to `verified-against-physical` is a well-organised opinion.
+
+### 2. The tool gets smarter by being told more about the situation
+
+Not by being given more geometry options. That distinction is the whole lesson
+of `application.py`.
+
+ZooMounter shipped a flag for the bearing topology and nearly shipped a question
+about whether to build one plate or two. Both were the same error: handing the
+user a choice between *shapes* when the shape is a consequence of the
+*application*. Replacing them with `ApplicationContext` did not add a feature —
+it moved a decision to where the information actually lives.
+
+The pattern generalises. Every new context input unlocks derivations the tool
+currently has to decline:
+
+| Input it does not have | What it could then decide |
+|---|---|
+| duty cycle and shaft speed | L10 bearing life instead of a static C0 check |
+| ambient and motor case temperature | whether a printed part is viable at all |
+| frame stiffness, how the motor is otherwise supported | whether it needs its own base plate |
+| peak acceleration | whether a moving mount's inertial load governs |
+
+The base-plate question is the live example. ZooMounter declines it today
+because it is not given what the answer depends on. **Declining is the correct
+output.** Do not resolve it by adding a flag — that is how it was wrong before.
+
+### 3. LLM at the edges, registry at the core
+
+The obvious next thought is to let a language model make these decisions
+directly. Don't.
+
+This project's central finding is that **a plausible number and a correct number
+are indistinguishable once written down**. Two bugs survived a green test suite
+*and* a passing verifier for exactly that reason. A language model is a machine
+for producing plausible numbers. Putting one in the decision seat does not solve
+that failure mode — it industrialises it, generating confident specs faster than
+anyone can check them, while the verifier keeps passing them because the spec is
+what is wrong.
+
+The correct architecture is already in this repo, one layer down. **The Agent API
+is a language model, and it works here because it is constrained to coordinates
+we computed and verified against them.** It does the drawing, not the deciding —
+and given exact numbers it lands them sub-0.001 mm. Apply the same relationship
+one layer up.
+
+Three jobs a model genuinely earns:
+
+1. **Input interpretation.** *"It's on a moving gantry near the operator"* →
+   `ApplicationContext(service="moving", workspace="shared")`. Structured,
+   inspectable, and a wrong reading is visible immediately.
+2. **Rule drafting.** Read a datasheet, propose a catalogue row or a rule —
+   arriving as `ai-proposed-unverified` by construction, which is what the
+   quarantine is for.
+3. **Explanation.** Turn a rule chain into prose for someone who did not write it.
+
+None of those is the decision. All three are checkable.
+
+**The test for which layer something belongs in:** *can it be wrong silently?*
+If yes, it is a rule. Numbers, limits, thresholds, decisions — anything where
+being wrong looks identical to being right until a part is scrap.
+
+### 4. What must never move into the model
+
+Stated as a prohibition, because it is the change a future contributor is most
+likely to make and least likely to notice the cost of:
+
+- **The decision.** A conclusion whose derivation is invisible cannot be
+  audited, regression-tested, or corrected once for everyone. A rule chain can
+  be pinned by a test; a judgement cannot.
+- **The numbers.** Every figure needs a source and its measurement conditions.
+  A model will supply both, convincingly, without either being true.
+- **The provenance.** `status` is the membrane between the two halves of this
+  architecture. A model may propose a rule; it does not get to promote its own
+  status. That requires a citation it did not write, or a part someone built.
+
+Reproducibility is the practical version of the same point. Generative output is
+not repeatable, which is why the determinism check is still open in `HANDOFF.md`
+— and why nothing that has to be identical next Tuesday should depend on a
+sampled token.

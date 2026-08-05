@@ -212,3 +212,39 @@ def test_motor_limitations_include_reaction_torque():
     ids = {r.id for r in rules.limitations(kind="motor")}
     assert "reaction_torque_unmodelled" in ids
     assert "belt_pretension_unmodelled" in ids
+
+
+# ---------------------------------------------------------------------------
+# The documented state of the registry has to be the actual state.
+# ---------------------------------------------------------------------------
+
+
+def test_the_documented_verified_count_is_true():
+    """RULES.md leads its future section with "0 verified-against-physical",
+    which is the most load-bearing sentence in the document: it is the tool
+    reporting its own epistemic state unflatteringly.
+
+    The moment someone builds a bracket and promotes a rule, that claim becomes
+    a lie unless the document is updated with it. Fail here so the promotion
+    and the documentation move together -- a registry that tracks provenance
+    while its own README drifts would be the exact defect this project exists
+    to catch, committed by the file that describes the fix.
+    """
+    from pathlib import Path
+
+    verified = [r for r in rules.RULES.values() if r.status == "verified-against-physical"]
+    doc = (Path(__file__).parent.parent / "RULES.md").read_text(encoding="utf-8")
+    claims_zero = "| **`verified-against-physical`** | **0** |" in doc
+
+    if verified:
+        assert not claims_zero, (
+            f"{len(verified)} rule(s) are now verified against a physical part "
+            f"({', '.join(r.id for r in verified)}), but RULES.md still claims 0. "
+            f"Update the table in 'Where this goes next' -- that number is the "
+            f"headline of the section."
+        )
+    else:
+        assert claims_zero, (
+            "no rule is verified against a physical part, but RULES.md no longer "
+            "says so. Restore the count rather than quietly dropping it."
+        )
