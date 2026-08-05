@@ -21,8 +21,8 @@ generate) and the **File Format API** (to measure).
 Text-to-CAD will happily turn a sentence into geometry. Two things it won't do:
 
 1. **Know your engineering constraints.** "A motor mount" doesn't encode the
-   NEMA 17 bolt circle, or how thick the plate has to be so it doesn't visibly
-   deflect under a 150N belt tension in PETG.
+   NEMA 17 bolt pattern, and it certainly doesn't know that the motor you're
+   bolting it to is rated for 28N of side load.
 2. **Tell you whether it got it right.** You get geometry back. Whether it
    matches what you asked for is your problem.
 
@@ -33,8 +33,8 @@ ZooMounter closes both, for one narrow, real task.
 1. **You give an engineering spec** — mount type, material, load *and load
    type*, safety factor.
 2. **A domain-rules layer computes the actual numbers.** The hole pattern comes
-   from the real hardware standard. The thickness comes from a beam calc
-   (see [Sizing](#sizing-what-the-numbers-mean)).
+   from the real hardware standard, and the shaft load is checked against the
+   motor's published rating (see [Sizing](#sizing-what-the-numbers-mean)).
 3. **Those exact numbers go into the Agent API prompt** — every hole as an
    explicit `(x, y)` coordinate, never "add some mounting holes." This is also
    why square NEMA faceplates, circular bolt circles and rectangular patterns
@@ -78,7 +78,7 @@ design and just realised I need one."* For that:
 
 ```bash
 cd my-zoo-project
-zoomounter --mount nema23 --material aluminum_6061 --load-n 120 --add xMotorMount
+zoomounter --mount nema23 --material aluminum_6061 --shaft-load-n 120 --load-type axial --add xMotorMount
 ```
 
 That's the whole thing. ZooMounter finds your Zoo project by walking up from
@@ -131,7 +131,7 @@ Also required:
 
 ```bash
 # scripted
-python -m zoomounter.cli --mount nema17 --material aluminum_6061 --load-n 150 --safety-factor 2
+python -m zoomounter.cli --mount nema17 --material aluminum_6061 --shaft-load-n 150 --safety-factor 2
 
 # interactive — run with no flags and answer the prompts
 python -m zoomounter.cli
@@ -140,7 +140,7 @@ python -m zoomounter.cli
 python -m zoomounter.gui
 ```
 
-The GUI adds a live thickness calculation as you type (instant, no API cost), a
+The GUI adds a live shaft-load check as you type (instant, no API cost), a
 rendered preview of the generated part, and an **"Export STEP + verify"**
 toggle — uncheck it for a fast preview-only run that skips the STEP export and
 verification.
@@ -153,11 +153,11 @@ Two flags exist because not every question needs a generation:
 # Size it and print the text-to-CAD prompt. No network, no credits, no Zoo CLI.
 # Paste the result straight into Zoo Design Studio's chat.
 python -m zoomounter.cli --mount nema23 --material aluminum_6061 \
-  --load-n 200 --safety-factor 2.5 --print-prompt
+  --shaft-load-n 200 --safety-factor 2.5 --print-prompt
 
 # Generate the Zoo project but skip STEP export and verification.
 # Removes the Zoo CLI dependency entirely — open the folder in Design Studio.
-python -m zoomounter.cli --mount nema17 --material petg --load-n 40 --no-export
+python -m zoomounter.cli --mount nema17 --material petg --shaft-load-n 40 --no-export
 ```
 
 Every run writes to its own timestamped folder under `./output/`, containing
@@ -184,29 +184,58 @@ Every run writes to its own timestamped folder under `./output/`, containing
 
 ## Sizing: what the numbers mean
 
-Load type matters, because a plate reacts the two cases completely differently.
+**The primary answer is not a thickness. It's whether your motor's shaft can
+take the load at all.**
 
-**`--load-type radial`** (default) — a side load: a belt, pulley or gear pulling
-perpendicular to the shaft. The plate acts as a cantilever, so this is genuinely
-thickness-governed. Checked against bending stress (yield ÷ safety factor) and
-tip deflection (limited to arm/300, a common bracket stiffness rule of thumb),
-with the larger winning. For motor mounts the motor's own weight is added
-(worst case: shaft horizontal, so gravity pulls sideways too) and the lever arm
-defaults to the motor's body length.
+A stepper's shaft runs in two small internal bearings, and their published
+limits are far lower than people expect — a NEMA 17 is rated **28 N radial and
+10 N axial**. Those limits are the real constraint on a motor mount, and no
+amount of bracket changes them. So ZooMounter checks the load against them
+first and reports one of:
 
-**`--load-type axial`** — thrust along the bolt axis, e.g. a leadscrew pushing
-back into a motor. The plate's own failure mode here is the screw head punching
-through it, which needs very little thickness. **For axial loads the plate is
-usually not the limiting element at all** — the fasteners, their thread
-engagement in the motor's tapped holes, and the motor's own axial bearing
-rating typically govern first. ZooMounter runs a screw-tension estimate and
-warns when the fasteners are the constraint, and explicitly names what it
-*doesn't* check, so a thin result reads as "look elsewhere" rather than as an
-all-clear.
+| Verdict | Meaning |
+|---|---|
+| `SHAFT OK` | Within the published rating, with margin. |
+| `BEARING RECOMMENDED` | Above 70% of an absolute maximum quoted with no margin. |
+| `BEARING REQUIRED` | Over the rating. The motor is the limit, not the plate. |
+| `NOT CHECKED` | No published rating on file. Not a pass. |
 
-Every report names which limit actually governed — including when it's just the
-minimum manufacturable wall thickness, which means the part isn't structurally
-limited at that load at all.
+When a bearing is needed it names one: *"F8-16M would carry this: rated 4990 N
+static against 240 N required"* — and gives you the command to generate it.
+
+### Two loads, not one
+
+- **`--shaft-load-n`** — acts at the shaft (belt, gear, leadscrew). This is what
+  gets checked, and what a bearing can bypass.
+- **`--plate-load-n`** — bolted to the bracket (a camera, a sensor). It never
+  reaches the shaft, so it is never compared against a shaft rating.
+
+They used to be one flag, which meant bolting a camera to the plate reported a
+shaft overload that cannot physically happen.
+
+### Radial loads are compared as moments
+
+A radial rating is quoted *at a stated distance from the flange* — 28 N **at
+20 mm** for a NEMA 17 — because what it protects is the front bearing, and a
+side load's severity there scales with how far out it acts. So both sides are
+converted to a moment before being compared. 28 N at 40 mm is twice the rated
+demand while a bare force comparison calls it a pass; 30 N at 10 mm is
+comfortably inside it while a bare force comparison fails it. Pass
+`--overhang-mm` if you know the real distance.
+
+### Thickness is a manufacturing floor
+
+It comes from two candidates — the minimum wall your process can produce, and
+the depth a bearing needs to seat in — and the larger wins. It is not a
+structural result, and the report says so.
+
+ZooMounter used to size the plate against the load with a bending-stress calc,
+an L/300 deflection limit, screw-head punching shear and a fastener-tension
+check. All four were removed, because **none of them ever governed**: for every
+part in scope the structural requirement lands below the process floor, so a
+thickness quoted to two decimals from a named beam formula was the process floor
+wearing a calculation's clothes. Deleting them is the honest result — see
+`docs/mechanics.html` for the full reasoning.
 
 ## Use it from an AI assistant (MCP)
 
@@ -246,7 +275,7 @@ which gets you the same thing:
 
 ```bash
 zoo alias set zoomounter '!cd /path/to/ZooMounter && python -m zoomounter.cli "$@"'
-zoo zoomounter --mount nema17 --material petg --load-n 40
+zoo zoomounter --mount nema17 --material petg --shaft-load-n 40
 ```
 
 And to open any generated project straight in the desktop app:
@@ -267,14 +296,29 @@ corrupted part.
 
 ## Honest limitations
 
-- **The calcs are hand-calc grade** — rectangular section, static load, no
-  stress concentration at holes. A sanity check for prototyping, not a
-  substitute for FEA on anything load-bearing.
+Every limitation below is declared in
+[`zoomounter/data/rules.toml`](zoomounter/data/rules.toml) with its reasoning,
+and printed in every inspection report. See [RULES.md](RULES.md).
+
+- **ZooMounter does not size plates against loads.** It checks shaft ratings and
+  sizes for manufacturability and bearing fit. If your case is genuinely
+  structural, this is the wrong tool.
+- **Reaction torque is not modelled** — and it is present whenever the motor
+  runs, at zero external load, reacted as shear in the bolt pattern. A NEMA 23 at
+  1.9 N·m puts roughly 28 N on each bolt, fully reversing on a bidirectional axis.
+- **Fatigue, impact and belt pretension are not modelled.** A reversing axis
+  loads its bracket cyclically at a level a static check calls safe; a hard stop
+  can exceed the running load by an order of magnitude; pretension loads the
+  shaft before any useful work is done.
+- **Thermal creep is not modelled.** A NEMA case runs at 70–80 °C and PLA softens
+  below that, so a printed bracket bolted straight to a motor can sag in service
+  at a load it held when new.
 - **One load type per run.** A real mount often sees radial and axial load
   simultaneously; this doesn't combine them. Run both and take the worse case.
-- **Motor mass and body length are representative values** for a typical
-  NEMA 17/23, not your specific motor's datasheet. Override the lever arm with
-  `--overhang-mm` if you know the real dimension.
+- **Motor mass and shaft offset are representative values** for a typical
+  NEMA 17/23, not your specific motor's datasheet. Override the offset with
+  `--overhang-mm` if you know the real dimension — for radial loads it directly
+  scales the demand.
 - **`bearing_608` models the bore as a plain through-hole** sized to the bearing
   OD. A real pillow block needs a shouldered pocket or retaining feature to
   actually capture the bearing.

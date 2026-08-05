@@ -70,7 +70,53 @@
   Written as the questions came up while building against a real X/Y gantry, so
   it records mistakes as well as conclusions.
 </p>
-<p class="updated">Working document. Last updated 2026-07-28.</p>
+<p class="updated">Working document. Last updated 2026-08-05.</p>
+
+<div class="warn">
+  <p><strong>Read this first: the load model described below has been removed
+  from the tool.</strong></p>
+
+  <p>
+    Sections 1–5 document a structural layer that sized the plate against the
+    load — bending stress, an L/300 tip-deflection limit, screw-head punching
+    shear, and a fastener-tension check. None of it is in the code any more.
+  </p>
+
+  <p>
+    It was deleted because <strong>it never governed</strong>. A NEMA 17's
+    published radial limit is 28&nbsp;N; run that through a cantilever calc on a
+    42&nbsp;mm plate in any real material and the answer lands below the minimum
+    wall the process can produce. That was true for every part in scope, so a
+    thickness quoted to two decimals from a named beam formula was the process
+    floor wearing a calculation's clothes. §4 below already conceded the point
+    for thrust and printed the number anyway.
+  </p>
+
+  <p>
+    It also answered a question about the wrong object. A motor housing is a
+    metal shell bolted to a flat plate — it is not the fragile part of the
+    assembly and never was. The fragile part is the shaft, and the small
+    bearings inside the motor that support it, whose published limits are an
+    order of magnitude below anything the bracket notices.
+  </p>
+
+  <p>
+    <strong>What the tool asks now:</strong> does this load exceed what the
+    component's shaft is rated for, and therefore does it need to bypass the
+    motor into a bearing? Thickness is a manufacturing floor — what the process
+    can make, what a bearing needs to seat in — and is reported as such.
+  </p>
+
+  <p>
+    These sections are kept rather than rewritten because the reasoning is the
+    interesting part. The worked numbers below are what made it obvious the
+    layer was not earning its place, and §3 and §4 record two bugs that are
+    still worth understanding. Read them as history, not as documentation of
+    current behaviour. For that, see <code>RULES.md</code> and
+    <code>zoomounter/data/rules.toml</code>, where every claim the tool makes
+    now lives with its source and a provenance status.
+  </p>
+</div>
 
 <!-- ================================================================= -->
 <h2>1. Coordinate system and terminology</h2>
@@ -385,12 +431,38 @@
 </p>
 
 <!-- ================================================================= -->
-<h2>6. Not everything that needs a mount is a motor <span class="tag tag-open">gap</span></h2>
+<h2>6. Not everything that needs a mount is a motor <span class="tag tag-open">resolved</span></h2>
 
 <p>
   The tool's framing — "give me a load, I'll give you a thickness" — fits
   motors and bearings. For a large share of real mounts it answers a question
   nobody asked.
+</p>
+
+<p>
+  <strong>This observation is what eventually reframed the whole project.</strong>
+  The table below was written as a gap in coverage, as though the fix were to
+  add board and panel mounts. It was the opposite. Every row with a
+  <code>≈0</code> structural load is a component the tool had no model for, and
+  shipping them meant producing confident output for load paths that did not
+  exist — a VESA row that published neither a mass nor an offset was sized as
+  though the screen weighed nothing and the load acted 15&nbsp;mm off the face,
+  because the loader's default filled in a field the row never set.
+</p>
+
+<p>
+  So the scope narrowed to parts governed by a shaft load: motors, bearing
+  housings, idlers, tensioners. The board and panel rows were removed rather
+  than modelled.
+</p>
+
+<p>
+  The general form of the fix is <code>applies_to</code> in
+  <code>zoomounter/data/rules.toml</code>: every rule declares the component
+  class it governs, so domain awareness is data rather than special cases in
+  code. A component matching no load rules gets told what actually governs it —
+  the right-hand column of this table — instead of receiving a thickness that
+  answers nothing. See <code>RULES.md</code>.
 </p>
 
 <div class="scroll">
@@ -441,21 +513,39 @@
 </ul>
 
 <!-- ================================================================= -->
-<h2>6. Open decisions</h2>
+<h2>8. Open decisions</h2>
+
+<p>
+  Items 1, 3 and 5 below were open when this document was written and have all
+  since shipped. They are kept, marked, rather than deleted: what they record is
+  that the questions worth asking were visible well before they were answered,
+  and item 2 was resolved by removing the calculation rather than by configuring
+  it.
+</p>
 
 <table>
-  <thead><tr><th>#</th><th>Question</th><th>Why it matters</th></tr></thead>
+  <thead><tr><th>#</th><th>Question</th><th>Status</th></tr></thead>
   <tbody>
     <tr><td>1</td><td>Split the lever arm into shaft-side and body-side distances?</td>
-        <td>Current default over-specifies ~2.4× on a shaft-end mount. §3</td></tr>
+        <td><strong>Shipped</strong>, then superseded. The split landed, and the
+        bending calc it fed was later removed entirely — the shaft-side distance
+        survives as the offset a radial rating is measured at, which is now the
+        only thing it is used for. §3</td></tr>
     <tr><td>2</td><td>Should the deflection limit be configurable?</td>
-        <td>It governs almost every radial result, and L/300 is generic. §2</td></tr>
+        <td><strong>Resolved by deletion.</strong> L/300 is a generic bracket
+        rule that models nothing relevant to a printed part bolted to a 70–80&nbsp;°C
+        motor. Making it configurable would have been tuning a number that
+        should not have been computed. Thermal creep is now a declared
+        limitation instead. §2</td></tr>
     <tr><td>3</td><td>Add bearing selection guidance for axial loads?</td>
-        <td>The thin-plate answer is correct but unhelpful on its own. §4</td></tr>
+        <td><strong>Shipped, and became the tool's primary output.</strong>
+        Selection is driven by the load case and names the part. §4</td></tr>
     <tr><td>4</td><td>Pick <code>w</code> based on load direction on non-square plates?</td>
-        <td>Currently always <code>plate_width_mm</code>. §1</td></tr>
+        <td><strong>Moot.</strong> <code>w</code> was the beam width in the
+        bending calc, which no longer exists. §1</td></tr>
     <tr><td>5</td><td>Add host-side mounting holes?</td>
-        <td>Generated plates bolt to the motor but not to the machine.</td></tr>
+        <td><strong>Shipped</strong> as T-slot mounting slots on extrusion
+        spacing, which also gives belt-tensioning adjustment for free.</td></tr>
   </tbody>
 </table>
 
