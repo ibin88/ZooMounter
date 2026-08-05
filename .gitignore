@@ -29,3 +29,9 @@ probes/probe_run.log
 *.egg-info/
 build/
 dist/
+
+# Not ours: a Zoo sample kept locally for reference, a scratch script, and
+# editor-local settings. Swept in once by a careless `git add -A`.
+axial-fan/
+scratch_mount.py
+.claude/
