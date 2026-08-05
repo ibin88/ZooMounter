@@ -219,3 +219,77 @@ def test_the_stub_shaft_standoff_reaches_the_schematic(app):
     app._on_topology_change("stub-shaft")
     stubbed = _schematic_geometry_after(app)
     assert plain != stubbed
+
+
+# ---------------------------------------------------------------------------
+# The Preview Calculation popup is a SECOND drawing, and it had the same bug
+# the inline schematic did: the motor was placed on one side unconditionally.
+# ---------------------------------------------------------------------------
+
+
+def _shaft_diagram_geometry(app, face, topology=TOPOLOGY_NONE):
+    """Render the popup's diagram onto a scratch canvas and return its coords."""
+    app.topology_var.set(topology)
+    app.mounting_face_var.set(face)
+    mount, _material, _load, _sf, thickness, decision = app._resolve_spec()
+    canvas = tkinter.Canvas(app, width=520, height=240)
+    try:
+        app._draw_shaft_diagram(
+            canvas, 520, 240, 260, 120, thickness, decision, "last", mount=mount
+        )
+        app.update_idletasks()
+        return tuple(tuple(canvas.coords(i)) for i in canvas.find_all())
+    finally:
+        canvas.destroy()
+
+
+def test_the_preview_diagram_follows_the_mounting_face(app):
+    """You reported this against the popup, not the inline schematic -- a
+    second drawing with the same defect. The motor was drawn to the left of
+    the plate whatever the face said."""
+    front = _shaft_diagram_geometry(app, "front")
+    back = _shaft_diagram_geometry(app, "back")
+    assert front, "the diagram drew nothing"
+    assert front != back, (
+        "front and back render identically -- the mounting face is not "
+        "reaching the preview diagram"
+    )
+
+
+def test_the_preview_diagram_mirrors_rather_than_shifting(app):
+    """A real mirror puts the motor on the other side of the plate. Anything
+    that merely nudges it would pass the inequality above while still showing
+    the wrong build."""
+    front = _shaft_diagram_geometry(app, "front")
+    back = _shaft_diagram_geometry(app, "back")
+    # The motor block is the first rectangle drawn in both cases.
+    front_motor_x = sum(front[0][::2]) / 2
+    back_motor_x = sum(back[0][::2]) / 2
+    assert (front_motor_x - 260) * (back_motor_x - 260) < 0, (
+        "the motor stayed on the same side of centre"
+    )
+
+
+def test_the_preview_diagram_shows_the_standoff_for_stub_shaft(app):
+    """The gap between motor and plate is what distinguishes the topologies.
+    A diagram without it draws the direct case while the report describes the
+    other one."""
+    plain = _shaft_diagram_geometry(app, "front", TOPOLOGY_NONE)
+    stubbed = _shaft_diagram_geometry(app, "front", "stub-shaft")
+    assert len(stubbed) > len(plain), "no coupling or standoff was drawn"
+
+
+def test_the_schematic_draws_the_motor_shaft(app):
+    """Requested directly: the schematic showed a motor block and a plate with
+    no shaft between them, so the load path the whole tool is about was the one
+    thing missing from the picture."""
+    app.mount_var.set("nema17")
+    app._on_mount_change("nema17")
+    without_shaft_geometry = _schematic_geometry_after(app)
+    labels = [
+        app.schematic_canvas.itemcget(i, "text")
+        for i in app.schematic_canvas.find_all()
+        if app.schematic_canvas.type(i) == "text"
+    ]
+    assert any("shaft" in t for t in labels), f"no shaft in schematic: {labels}"
+    assert without_shaft_geometry

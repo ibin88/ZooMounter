@@ -267,3 +267,42 @@ def test_motor_bolt_holes_sit_on_the_catalogue_positions():
     kcl = assembly.component_kcl(N17, 1.0, FACE_FRONT)
     for x, y in N17.hole_positions:
         assert f"center = [{x:g}mm, {y:g}mm]" in kcl
+
+
+# ---------------------------------------------------------------------------
+# The standoffs. Without them the stub-shaft assembly shows a motor hovering
+# in space with nothing explaining why it stays there.
+# ---------------------------------------------------------------------------
+
+
+def test_stub_shaft_assembly_draws_standoffs():
+    stub, _ = _spec(TOPOLOGY_STUB_SHAFT)
+    kcl = assembly.component_kcl(stub, 7.0, FACE_FRONT)
+    assert kcl.count("Body = extrude(standoff") == len(stub.hole_positions)
+
+
+def test_standoffs_sit_on_the_motors_bolt_pattern():
+    """They are what carries the motor's weight and reaction torque into the
+    plate, so they go where the bolts go -- not at invented positions."""
+    stub, _ = _spec(TOPOLOGY_STUB_SHAFT)
+    kcl = assembly.component_kcl(stub, 7.0, FACE_FRONT)
+    for x, y in stub.hole_positions:
+        assert f"center = [{x:g}mm, {y:g}mm]" in kcl
+
+
+def test_standoffs_close_the_gap_between_motor_and_plate():
+    """A standoff that does not reach the plate is drawing the same floating
+    motor it was added to explain."""
+    stub, _ = _spec(TOPOLOGY_STUB_SHAFT)
+    thickness = 7.0
+    kcl = assembly.component_kcl(stub, thickness, FACE_FRONT)
+    start = _plane_offsets(kcl, "standoff0")
+    end = start + _extrude_length(kcl, "standoff0")
+    assert start == pytest.approx(thickness / 2 + stub.motor_standoff_mm)
+    assert end == pytest.approx(thickness / 2), "standoff must land on the plate face"
+
+
+def test_the_direct_topology_has_no_standoffs():
+    """The motor bolts flat to the plate there, so spacers would be fiction."""
+    direct, _ = _spec(TOPOLOGY_DIRECT)
+    assert "standoff" not in assembly.component_kcl(direct, 9.0, FACE_FRONT)

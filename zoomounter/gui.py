@@ -506,6 +506,54 @@ class App(ctk.CTk):
                 "#aaaaaa", ("Arial", 8), (0, -8 if front else 8),
                 "s" if front else "n",
             ))
+
+            # The shaft. Without it the motor is a floating block and the one
+            # thing the picture is about -- the load path from the shaft into
+            # the plate -- is missing from it entirely.
+            #
+            # Drawn as a quad through the centre rather than a cylinder: the
+            # projection has no hidden-line removal, so a tube here reads as a
+            # tangle of ellipses over the plate. A flat blade through the
+            # middle says "shaft, this long, this thick" and nothing it cannot
+            # back up.
+            shaft_dia = base.shaft_dia_mm
+            if shaft_dia > 0:
+                sr = shaft_dia / 2
+                if standoff > 0:
+                    # Stub-shaft: the motor's own shaft stops in the coupling,
+                    # and a separate stub runs through the plate. Two shafts,
+                    # because that is the whole claim of the topology.
+                    coupling_mid = base_z - sgn * (standoff * 0.5)
+                    shapes.append({
+                        "pts": [(-sr, 0, base_z), (sr, 0, base_z),
+                                (sr, 0, coupling_mid), (-sr, 0, coupling_mid)],
+                        "fill": "#c8ccd2", "outline": "#e8ecf2", "width": 1,
+                    })
+                    stub_r = (mount.bearing_bore_mm or shaft_dia) / 2
+                    stub_end = (-20.0) if front else (T + 20.0)
+                    shapes.append({
+                        "pts": [(-stub_r, 0, coupling_mid), (stub_r, 0, coupling_mid),
+                                (stub_r, 0, stub_end), (-stub_r, 0, stub_end)],
+                        "fill": "#c8ccd2", "outline": "#e8ecf2", "width": 1,
+                    })
+                    labels.append((
+                        (0, 0, coupling_mid), "coupling",
+                        "#9aa2ad", ("Arial", 8), (14, 0), "w",
+                    ))
+                else:
+                    # Straight through the plate and out the far side.
+                    shaft_end = (-20.0) if front else (T + 20.0)
+                    shapes.append({
+                        "pts": [(-sr, 0, base_z), (sr, 0, base_z),
+                                (sr, 0, shaft_end), (-sr, 0, shaft_end)],
+                        "fill": "#c8ccd2", "outline": "#e8ecf2", "width": 1,
+                    })
+                labels.append((
+                    (0, 0, (-20.0) if front else (T + 20.0)),
+                    f"shaft {shaft_dia:g}mm",
+                    "#c8ccd2", ("Arial", 8), (10, 10 if front else -10),
+                    "w",
+                ))
         # mount and thickness were already resolved (with host-mount features
         # and any bearing integration applied) at the top of this method --
         # reuse them instead of re-resolving with a stale call signature.
@@ -954,7 +1002,8 @@ class App(ctk.CTk):
             thickness=thickness, mount=mount, decision=decision,
         )
 
-    def _draw_shaft_diagram(self, canvas, w, h, cx, cy, thickness, decision, arrow_last) -> None:
+    def _draw_shaft_diagram(self, canvas, w, h, cx, cy, thickness, decision, arrow_last,
+                            mount=None) -> None:
         """Draw the load path and how much of the shaft's rating it uses.
 
         Deliberately schematic rather than to scale: the point is which way the
@@ -970,28 +1019,77 @@ class App(ctk.CTk):
             )
             return
 
-        plate_x, plate_top, plate_h, plate_w = cx - 60, cy - 55, 110, 14
-        # Motor body behind the plate.
+        # Which side the motor sits on. This diagram used to draw it on the
+        # left unconditionally, so switching the mounting face repainted an
+        # identical picture -- the same defect the inline schematic had, in a
+        # second drawing nobody thought to check.
+        #
+        # `d` mirrors the whole layout about the centre: +1 puts the motor left
+        # with the shaft running right, -1 the other way. Everything below is
+        # written in terms of d so the two cases cannot drift apart.
+        face_front = self.mounting_face_var.get() == "front"
+        d = 1 if face_front else -1
+        standoff_px = 62 if (mount is not None and getattr(mount, "motor_standoff_mm", 0)) else 0
+
+        plate_x = cx - d * 46
+        plate_top, plate_h, plate_w = cy - 55, 110, 14
+        plate_near = plate_x - (plate_w / 2)   # face the motor looks at
+        plate_far = plate_x + (plate_w / 2)
+
+        # Motor body, offset back from the plate by the standoff if there is one.
+        motor_far = plate_near - d * (standoff_px + 78)
+        motor_near = plate_near - d * standoff_px
         canvas.create_rectangle(
-            plate_x - 78, cy - 38, plate_x, cy + 38, fill="#333", outline="gray"
+            motor_far, cy - 38, motor_near, cy + 38, fill="#333", outline="gray"
         )
-        canvas.create_text(plate_x - 39, cy, text="Motor", fill="gray70")
+        canvas.create_text((motor_far + motor_near) / 2, cy, text="Motor", fill="gray70")
+
         # The plate.
         canvas.create_rectangle(
-            plate_x, plate_top, plate_x + plate_w, plate_top + plate_h,
+            plate_near, plate_top, plate_far, plate_top + plate_h,
             fill="#2fa572", outline="white", width=2,
         )
         canvas.create_text(
-            plate_x + plate_w / 2, plate_top + plate_h + 12,
+            plate_x, plate_top + plate_h + 12,
             text=f"{thickness.required_thickness_mm:.2f}mm", fill="white",
         )
+
+        if standoff_px:
+            # Stub-shaft topology: the motor's own shaft stops in the coupling
+            # and the plate carries a separate stub shaft. Drawing the gap is
+            # the only way the picture distinguishes this from the direct case.
+            canvas.create_rectangle(
+                motor_near, cy - 4, motor_near + d * (standoff_px * 0.35), cy + 4,
+                fill="#888", outline="black",
+            )
+            coup_a = motor_near + d * (standoff_px * 0.2)
+            coup_b = motor_near + d * (standoff_px * 0.8)
+            canvas.create_rectangle(
+                min(coup_a, coup_b), cy - 11, max(coup_a, coup_b), cy + 11,
+                fill="#6b7280", outline="#aaa",
+            )
+            canvas.create_text(
+                (coup_a + coup_b) / 2, cy - 20, text="coupling",
+                fill="#9aa2ad", font=("Arial", 8),
+            )
+            canvas.create_text(
+                (motor_near + plate_near) / 2, cy + 30,
+                text=f"{mount.motor_standoff_mm:g}mm standoff",
+                fill="#9aa2ad", font=("Arial", 8),
+            )
+            # Stub shaft starts inside the coupling.
+            shaft_start = coup_b
+        else:
+            shaft_start = plate_near
+
         # The shaft, running out through the plate to where the load acts.
         shaft_len = 150
+        shaft_end = plate_far + d * shaft_len
         canvas.create_rectangle(
-            plate_x + plate_w, cy - 5, plate_x + plate_w + shaft_len, cy + 5,
+            min(shaft_start, shaft_end), cy - 5, max(shaft_start, shaft_end), cy + 5,
             fill="#888", outline="black",
         )
-        load_x = plate_x + plate_w + shaft_len - 18
+        load_x = shaft_end - d * 18
 
         if decision.load_type == "radial":
             canvas.create_line(
@@ -999,26 +1097,28 @@ class App(ctk.CTk):
                 arrow=arrow_last, fill="#e05252", width=3,
             )
             canvas.create_text(
-                load_x + 6, cy - 62,
-                text=f"{decision.shaft_load_n:.0f} N", fill="#e05252", anchor="w",
+                load_x + d * 6, cy - 62,
+                text=f"{decision.shaft_load_n:.0f} N", fill="#e05252",
+                anchor="w" if face_front else "e",
             )
             # The offset is the whole reason a radial rating needs a distance.
             dim_y = cy + 46
-            canvas.create_line(plate_x + plate_w, dim_y, load_x, dim_y, fill="#777")
-            for x in (plate_x + plate_w, load_x):
+            canvas.create_line(plate_far, dim_y, load_x, dim_y, fill="#777")
+            for x in (plate_far, load_x):
                 canvas.create_line(x, dim_y - 5, x, dim_y + 5, fill="#777")
             canvas.create_text(
-                (plate_x + plate_w + load_x) / 2, dim_y + 12,
+                (plate_far + load_x) / 2, dim_y + 12,
                 text=f"{decision.offset_mm:g}mm from face", fill="white",
             )
         else:
             canvas.create_line(
-                load_x + 40, cy, load_x - 10, cy,
+                load_x + d * 40, cy, load_x - d * 10, cy,
                 arrow=arrow_last, fill="#e05252", width=3,
             )
             canvas.create_text(
-                load_x + 46, cy - 14,
-                text=f"{decision.shaft_load_n:.0f} N thrust", fill="#e05252", anchor="w",
+                load_x + d * 46, cy - 14,
+                text=f"{decision.shaft_load_n:.0f} N thrust", fill="#e05252",
+                anchor="w" if face_front else "e",
             )
 
         if decision.utilisation is None:
@@ -1085,7 +1185,8 @@ class App(ctk.CTk):
             # drawn now is the load path and the utilisation, because that is
             # what decides the part.
             arrow_last = ctk.LAST if "tk" not in globals() else "last"
-            self._draw_shaft_diagram(canvas, w, h, cx, cy, thickness, decision, arrow_last)
+            self._draw_shaft_diagram(canvas, w, h, cx, cy, thickness, decision,
+                                     arrow_last, mount=mount)
 
         label = ctk.CTkLabel(
             popup, 
@@ -1111,9 +1212,15 @@ class App(ctk.CTk):
             self.status_label.configure(text=f"Input error: {e}", text_color="#e05252")
             return
 
+        # Resolved to an absolute path immediately: "output" is relative to
+        # wherever this process's CWD happens to be, which is invisible to
+        # the user (e.g. launched from a shortcut or IDE run config with a
+        # different working directory). Every write and every status message
+        # below uses this same absolute path, so "Project: ..." always names
+        # a folder the user can actually find.
         self.output_dir = default_output_dir(
             self.mount_var.get(), self.material_var.get(), base=self.output_base_var.get() or "output"
-        )
+        ).resolve()
         self.generation_running = True
         self.generate_button.configure(state="disabled", text="Working...")
         self.open_folder_button.configure(state="disabled")

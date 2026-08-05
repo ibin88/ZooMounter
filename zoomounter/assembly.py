@@ -68,6 +68,7 @@ MOTOR_TAP_DEPTH_MM = 5.0
 # so the two cannot drift apart.
 COUPLING_OD_MM = 18.0
 COLOUR_COUPLING = "#6b7280"
+COLOUR_STANDOFF = "#9aa2ad"
 
 HEADER = "@settings(defaultLengthUnit = mm, kclVersion = 2.0)\n"
 
@@ -200,6 +201,47 @@ def _sign(face: str) -> float:
     return 1.0 if face == FACE_FRONT else -1.0
 
 
+def _standoffs(mount, s: float, body_base: float) -> list[str]:
+    """The spacers holding the motor off the plate.
+
+    Without these the stub-shaft assembly shows a motor hovering in space and
+    nothing explaining why it stays there. The standoff is real, load-bearing
+    hardware -- it is what carries the motor's weight and its reaction torque
+    into the plate -- so leaving it out made the picture describe a build that
+    could not stand up.
+
+    Drawn at true length from the motor's face, so the exploded view separates
+    them from the plate along with the motor rather than stretching them.
+    """
+    length = mount.motor_standoff_mm
+    if length <= 0 or not mount.hole_positions:
+        return []
+
+    # A hex standoff for a given screw is a little larger across corners than
+    # the screw head. 1.8x the clearance hole matches the head-diameter rule
+    # already used for fasteners elsewhere, and is only ever drawn, never
+    # dimensioned -- what is real here is the POSITION, which is the motor's
+    # own bolt pattern.
+    dia = mount.bolt_hole_dia_mm * 1.8
+    out = []
+    for i, (hx, hy) in enumerate(mount.hole_positions):
+        r = dia / 2
+        var = f"standoff{i}"
+        out.append(
+            f"{var}Plane = offsetPlane(XY, offset = {body_base:g})\n"
+            f"{var}Sketch = sketch(on = {var}Plane) {{\n"
+            f"  profile = circle(start = [{hx + r:g}mm, {hy:g}mm], "
+            f"center = [{hx:g}mm, {hy:g}mm])\n"
+            f"  diameter(profile) == {dia:g}mm\n"
+            f"}}\n"
+            f"{var}Region = region(segments = [{var}Sketch.profile])\n"
+            f"{var}Body = extrude({var}Region, length = {-s * length:g})\n"
+            f'  |> appearance(color = "{COLOUR_STANDOFF}")\n'
+            f"hidden{var} = hide({var}Sketch)\n"
+        )
+    return out
+
+
 def _coupling_and_stub(mount, thickness_mm: float, s: float, explode_mm: float) -> list[str]:
     """The flexible coupling and the stub shaft it drives.
 
@@ -294,8 +336,10 @@ def component_kcl(mount, thickness_mm: float, face: str, explode_mm: float = 0.0
                           -s * (thickness_mm + SHAFT_STUB_MM + explode_mm),
                           COLOUR_SHAFT)
                 )
-        if standoff > 0 and mount.bearing_bore_mm > 0:
-            parts += _coupling_and_stub(mount, thickness_mm, s, explode_mm)
+        if standoff > 0:
+            parts += _standoffs(mount, s, body_base)
+            if mount.bearing_bore_mm > 0:
+                parts += _coupling_and_stub(mount, thickness_mm, s, explode_mm)
         return "\n".join(parts)
 
     if mount.kind == "bearing":
