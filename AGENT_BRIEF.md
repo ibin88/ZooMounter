@@ -53,11 +53,14 @@ A passing test suite here is weaker evidence than usual.
    message the user sees can always be traced back to a claim with a source and a status.
 8. **Deleting a calculation is a valid change.** The structural layer was removed because it never
    governed. Do not re-add a calculation on the grounds that a tool ought to compute something.
+9. **Offering a worse option means saying why it is worse.** `--bearing-topology direct` exists because
+   people build it, and it emits three LOUD WARNs. An option offered without its costs is how you ship
+   something that looks like a bearing mount without being one.
 
 ## Commands
 
 ```bash
-python -m pytest tests/ -q                     # 200 offline tests, no API, no credits
+python -m pytest tests/ -q                     # 222 offline tests, no API, no credits
 python -m zoomounter.cli --print-prompt ...    # size + prompt only, free, no Zoo CLI needed
 python -m zoomounter.cli --no-export ...       # KCL project, skip STEP export and verification
 python -m zoomounter.cli --add NAME ...        # write into the surrounding Zoo project
@@ -74,7 +77,7 @@ python -m zoomounter.mcp_server
 | `mechanics.py` | `shaft_support()` — the primary answer. Thickness = manufacturing floors only |
 | `rules.py` | rule registry: loads `data/rules.toml`, enforces the provenance quarantine |
 | `catalogue.py` | loads and validates `data/*.toml`; a malformed row stops the import |
-| `bearings.py` | bearing catalogue, load-driven selection, seat geometry |
+| `bearings.py` | bearing catalogue, load-driven selection, seat geometry, **the two topologies** |
 | `assembly.py` | component + mount + bearing assembly KCL |
 | `generate.py` | Agent API call, KCL project writing, STEP export, snapshot |
 | `verify.py` | three checks — hole positions, bounding box, volume |

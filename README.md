@@ -223,6 +223,35 @@ demand while a bare force comparison calls it a pass; 30 N at 10 mm is
 comfortably inside it while a bare force comparison fails it. Pass
 `--overhang-mm` if you know the real distance.
 
+### Putting a bearing in: two topologies, and they are different parts
+
+`--bearing-topology` is how a bearing actually takes the load off the motor.
+There are two ways, and only one of them fully works:
+
+| | `stub-shaft` *(recommended)* | `direct` |
+|---|---|---|
+| What turns in the bearing | its own short stub shaft | the motor's own shaft |
+| Motor | stands off on spacers, drives through a flexible coupling | bolts flat to the plate |
+| Load reaching the motor | none — torque only | partial at best |
+| Thrust | works | **almost nothing** — a plain stepper shaft has no shoulder to push against |
+| Plate (NEMA 17 + 625) | 5 mm | 9 mm — boss recess and seat stack on opposite faces |
+
+`direct` is offered because it's what most hobby builds do, but it is
+overconstrained against the motor's own front bearing, and on a NEMA 17 the
+22 mm pilot boss versus a 16 mm bearing means there's no material gripping the
+outer ring concentrically. ZooMounter builds it if you ask and says all three
+things while doing it.
+
+```bash
+python -m zoomounter.cli --mount nema17 --material aluminum_6061 \
+  --shaft-load-n 40 --load-type radial --bearing-topology stub-shaft
+```
+
+The standoff is not arbitrary: a standard D18–D19 × L25 aluminium flexible
+coupling is 25 mm long, so the motor face sits 30 mm off the plate. The
+generated assembly draws the coupling, and you can see the motor's own shaft
+stop inside it — never reaching the plate, which is the entire claim.
+
 ### Thickness is a manufacturing floor
 
 It comes from two candidates — the minimum wall your process can produce, and
