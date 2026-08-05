@@ -422,5 +422,67 @@ who knows where they go, the missing half becomes the bottleneck.
 
 ---
 
+## 12. `translate` on an imported module moves only its last body
+
+This one is a bug report, and it is the most expensive thing I found.
+
+Positioning a multi-part assembly the obvious way silently half-works:
+
+```kcl
+import "multi.kcl" as multi     // defines bodyA, then bodyB
+
+multi
+  |> translate(x = 30, y = 0, z = 0)
+```
+
+`bodyB` — the last solid defined in the module — lands at x=30. `bodyA` stays
+at x=0. No error, no warning, and the export succeeds. The result looks like a
+deliberate design.
+
+| Body | Defined | X after `translate(x = 30)` |
+|---|---|---|
+| `bodyA` | first | **0.0** |
+| `bodyB` | last | 30.0 |
+
+Reproduction, exported STEP and parsed coordinates are in
+`probes/assembly-translate/`.
+
+**Why this is worse than a straightforward failure.** A four-part mount
+assembly positioned this way puts three bodies at the origin and one where you
+asked. If the part you happened to look at first is the one that moved, you
+conclude it worked. The failure is invisible until something does not fit, and
+by then the transform is several edits back.
+
+It also interacts badly with generated assemblies specifically. A tool emitting
+KCL cannot inspect what it produced to check the transform took — it would have
+to export to STEP and parse the coordinates back, which is exactly what I ended
+up doing to find this.
+
+**The workaround, which I would rather not need.** Every body carries its own
+transform, driven by a shared parameters file:
+
+```kcl
+// parameters.kcl
+export asmX = 0
+export asmY = 0
+export asmZ = 0
+
+// each part file
+import * from "parameters.kcl"
+someBody = extrude(...)
+  |> translate(x = asmX, y = asmY, z = asmZ)
+```
+
+Verified: a real 15-body mount assembly then shifts by exactly 100mm as a unit.
+
+**What would help:** either make module-level `translate` apply to every body in
+the module, or reject it with an error saying it cannot. Silently transforming
+one of four is the only outcome with no good use case. If the current behaviour
+is intentional — perhaps the module evaluates to its last expression — then the
+docs should say so, because the whole-file import form reads as "bring in this
+assembly" and nothing suggests it collapses to one solid.
+
+---
+
 *Findings from building [ZooMounter](https://github.com/ibin88/ZooMounter) for
 the Zoo API Makeathon, July-August 2026. Happy to expand on any of these.*

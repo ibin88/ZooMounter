@@ -18,6 +18,7 @@ Every rule declares where it came from and how far it can be trusted:
     vendor-datasheet          a manufacturer published it for a specific part
     standard                  a published standard (ISO, NEMA) states it
     derived                   we reasoned it out -- defensible, but ours
+    measured-against-api      we measured it against a running API, probe committed
     ai-proposed-unverified    an AI suggested it; nobody has checked it
     verified-against-physical someone built it and measured it
 
@@ -56,6 +57,13 @@ VALID_STATUSES = {
     "vendor-datasheet",
     "standard",
     "derived",
+    # Empirically measured against a running API, with the probe committed.
+    # Distinct from `derived` (which is reasoning) and from
+    # `verified-against-physical` (which needs a part someone built). Added
+    # because the alternative was labelling a measurement as an opinion, which
+    # understates evidence -- the mirror image of the overstatement this
+    # registry exists to prevent.
+    "measured-against-api",
     "ai-proposed-unverified",
     "verified-against-physical",
 }

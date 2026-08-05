@@ -1241,6 +1241,12 @@ def main(argv: list[str] | None = None) -> int:
         console.print(Panel.fit("[bold red]FAIL[/bold red]", border_style="red"))
     console.print(f"[dim]Report:[/dim] {report_path}")
 
+    # A guide inside the run itself, so a browsable folder of runs is not a
+    # pile of unlabelled KCL. The delivery-specific one comes later.
+    carried = list(decision.checks) if decision else []
+    carried += list(thickness.notes)
+    deliver_mod.write_run_guide(output_dir, carried)
+
     _prune(args, output_dir)
     console.print(
         f"[dim]Deliver it anywhere with:[/dim] zoomounter --deliver "

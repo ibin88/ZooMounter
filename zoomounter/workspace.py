@@ -40,7 +40,13 @@ ENV_HOME = "ZOOMOUNTER_HOME"
 DEFAULT_KEEP_RUNS = 5
 
 # Written by the run and worth keeping.
-KEEP_IN_RUN = ("main.kcl", "project.toml", "preview.png", "inspection_report.md")
+KEEP_IN_RUN = (
+    "main.kcl",
+    "project.toml",
+    "preview.png",
+    "inspection_report.md",
+    "HOW-TO-USE.md",
+)
 
 # The exploded assembly is render-only and never verified -- its job is done
 # once preview.png exists. Named here rather than inlined so the retention

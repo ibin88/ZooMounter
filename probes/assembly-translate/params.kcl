@@ -1,0 +1,4 @@
+@settings(defaultLengthUnit = mm, kclVersion = 2.0)
+export asmX = 30
+export asmY = 0
+export asmZ = 0

@@ -25,11 +25,17 @@ finishedPlate = extrude(plateSketch, length = 7)
 
 
 def _fake_run(root: Path, name: str = "nema17_pla_20260805_120000") -> Path:
-    """A run folder shaped like a real one, without spending credits."""
+    """A run folder shaped like a real one, without spending credits.
+
+    The assembly is built by the real writer rather than faked, so these tests
+    exercise the file set delivery actually sees -- including parameters.kcl,
+    which a hand-stubbed assembly/ silently lacked and which delivery needs.
+    """
+    from zoomounter import assembly as assembly_mod
+    from zoomounter.mount_specs import get_mount
+
     run = root / name
     (run / "export").mkdir(parents=True, exist_ok=True)
-    (run / "assembly").mkdir(exist_ok=True)
-    (run / "assembly-exploded").mkdir(exist_ok=True)
     (run / "main.kcl").write_text(KCL, encoding="utf-8")
     (run / "project.toml").write_text('default_file = "main.kcl"\n', encoding="utf-8")
     (run / "preview.png").write_bytes(b"\x89PNG\r\n\x1a\n")
@@ -37,7 +43,11 @@ def _fake_run(root: Path, name: str = "nema17_pla_20260805_120000") -> Path:
         "# Report\n\n![Rendered part](preview.png)\n", encoding="utf-8"
     )
     (run / "export" / "output.step").write_text("ISO-10303-21;\n", encoding="utf-8")
-    (run / "assembly" / "main.kcl").write_text(KCL, encoding="utf-8")
+
+    assembly_mod.write_assembly(
+        run / "assembly", get_mount("nema17"), 4.0, KCL, base_mount=get_mount("nema17")
+    )
+    (run / "assembly-exploded").mkdir(exist_ok=True)
     (run / "assembly-exploded" / "main.kcl").write_text(KCL, encoding="utf-8")
     return run
 
@@ -191,19 +201,24 @@ def test_listing_runs_ignores_protected_names(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_delivered_kcl_carries_its_export_line(tmp_path):
+def test_part_only_delivery_carries_its_export_line(tmp_path):
     """The step users cannot reliably do by hand. Agent API output is a
     standalone script that exports nothing, so `import x from "x.kcl"` against
-    it simply fails."""
+    it simply fails.
+
+    assembly=False, because a whole assembly is imported whole-file and needs
+    no export -- see the assembly tests below."""
     run = _fake_run(tmp_path / "runs")
-    result = deliver_mod.deliver(run, tmp_path / "dest", name="xMotorMount")
+    result = deliver_mod.deliver(
+        run, tmp_path / "dest", name="xMotorMount", assembly=False
+    )
     body = result.kcl_path.read_text(encoding="utf-8")
     assert "export xMotorMount = finishedPlate" in body
 
 
 def test_delivering_writes_a_step_for_other_cad(tmp_path):
     run = _fake_run(tmp_path / "runs")
-    result = deliver_mod.deliver(run, tmp_path / "dest", name="m")
+    result = deliver_mod.deliver(run, tmp_path / "dest", name="m", assembly=False)
     assert result.step_path is not None
     assert result.step_path.read_text(encoding="utf-8").startswith("ISO-10303-21")
 
@@ -215,7 +230,7 @@ def test_delivering_into_a_zoo_project_wires_up_main_kcl(tmp_path):
     (project / "main.kcl").write_text("@settings(defaultLengthUnit = mm)\n", encoding="utf-8")
 
     run = _fake_run(tmp_path / "runs")
-    result = deliver_mod.deliver(run, project, name="xMotorMount")
+    result = deliver_mod.deliver(run, project, name="xMotorMount", assembly=False)
 
     assert result.project is not None
     assert result.entry_modified
@@ -225,7 +240,7 @@ def test_delivering_into_a_zoo_project_wires_up_main_kcl(tmp_path):
 
 def test_delivering_somewhere_that_is_not_a_project_says_so(tmp_path):
     run = _fake_run(tmp_path / "runs")
-    result = deliver_mod.deliver(run, tmp_path / "plain", name="m")
+    result = deliver_mod.deliver(run, tmp_path / "plain", name="m", assembly=False)
     assert result.project is None
     guide = result.guide_path.read_text(encoding="utf-8")
     assert "not a Zoo project" in guide
@@ -247,7 +262,9 @@ def test_the_guide_states_the_origin_limitation(tmp_path):
     """An unstated limitation reads as a solved problem. The part is at the
     origin and ZooMounter has no idea where it belongs."""
     run = _fake_run(tmp_path / "runs")
-    guide = deliver_mod.deliver(run, tmp_path / "dest").guide_path.read_text("utf-8")
+    guide = deliver_mod.deliver(
+        run, tmp_path / "dest", assembly=False
+    ).guide_path.read_text("utf-8")
     assert "ORIGIN" in guide
     assert "mate or constraint system" in guide
     assert "translate" in guide
@@ -293,3 +310,126 @@ def test_clipboard_kcl_is_the_generated_part_not_a_prompt(tmp_path):
     assert "export m = finishedPlate" in text
     assert "@settings" in text
     assert "Generate a flat rectangular" not in text
+
+
+# ---------------------------------------------------------------------------
+# Delivering the ASSEMBLY, which is the default.
+#
+# A mount plate on its own is the part ZooMounter designed but not the thing
+# the user was working on. The run already decided the bearing, the standoff
+# height and the coupling; handing over one plate throws all of that away.
+# ---------------------------------------------------------------------------
+
+
+def test_delivery_ships_the_whole_assembly_by_default(tmp_path):
+    run = _fake_run(tmp_path / "runs")
+    result = deliver_mod.deliver(run, tmp_path / "dest", name="xMotorMount")
+    names = {p.name for p in (tmp_path / "dest").iterdir()}
+    assert "xMotorMount.kcl" in names, "the assembly file"
+    assert "xMotorMountParameters.kcl" in names, "where it sits"
+    assert "xMotorMountMount.kcl" in names, "the verified part"
+    assert "xMotorMountComponent.kcl" in names, "the motor, for context"
+
+
+def test_the_assembly_position_lives_in_one_file(tmp_path):
+    """Three numbers, one place. Every body reads them, so the assembly moves
+    as a unit -- which is as close to a mate as KCL currently gets."""
+    run = _fake_run(tmp_path / "runs")
+    deliver_mod.deliver(run, tmp_path / "dest", name="m")
+    params = (tmp_path / "dest" / "mParameters.kcl").read_text(encoding="utf-8")
+    for axis in ("asmX", "asmY", "asmZ"):
+        assert f"export {axis} = 0" in params
+
+
+def test_every_body_translates_individually(tmp_path):
+    """Not redundancy -- necessity. Translating a whole imported module moves
+    only its LAST body and silently leaves the rest at the origin. Measured in
+    probes/, and finding #12 in NOTES-FOR-ZOO."""
+    run = _fake_run(tmp_path / "runs")
+    deliver_mod.deliver(run, tmp_path / "dest", name="m")
+    for part in ("mMount.kcl", "mComponent.kcl"):
+        text = (tmp_path / "dest" / part).read_text(encoding="utf-8")
+        assert 'import * from "mParameters.kcl"' in text, f"{part} cannot see the position"
+        assert "translate(x = asmX, y = asmY, z = asmZ)" in text
+
+
+def test_delivered_parts_are_prefixed_so_two_assemblies_can_coexist(tmp_path):
+    """An unprefixed parameters.kcl from a second delivery would overwrite the
+    first and silently move an assembly nobody touched."""
+    run = _fake_run(tmp_path / "runs")
+    dest = tmp_path / "dest"
+    deliver_mod.deliver(run, dest, name="xAxis")
+    deliver_mod.deliver(run, dest, name="yAxis")
+    names = {p.name for p in dest.iterdir()}
+    assert {"xAxisParameters.kcl", "yAxisParameters.kcl"} <= names
+    assert "parameters.kcl" not in names
+    x = (dest / "xAxisMount.kcl").read_text(encoding="utf-8")
+    assert 'import * from "xAxisParameters.kcl"' in x
+
+
+def test_an_assembly_is_imported_whole_file_not_by_export(tmp_path):
+    """`import x from "x.kcl"` needs one exported body and would bring in one
+    part out of four. Zoo's own axial-fan sample uses the whole-file form for
+    exactly this reason."""
+    project = tmp_path / "proj"
+    project.mkdir()
+    (project / "project.toml").write_text('default_file = "main.kcl"\n', encoding="utf-8")
+    (project / "main.kcl").write_text("@settings(defaultLengthUnit = mm)\n", encoding="utf-8")
+
+    run = _fake_run(tmp_path / "runs")
+    result = deliver_mod.deliver(run, project, name="xMotorMount")
+
+    assert result.entry_modified
+    entry = (project / "main.kcl").read_text(encoding="utf-8")
+    assert 'import "xMotorMount.kcl" as xMotorMount' in entry
+    assert "xMotorMount" in entry.splitlines()[-1] or "xMotorMount" in entry
+
+
+def test_the_assembly_file_points_at_the_prefixed_parts(tmp_path):
+    run = _fake_run(tmp_path / "runs")
+    deliver_mod.deliver(run, tmp_path / "dest", name="m")
+    asm = (tmp_path / "dest" / "m.kcl").read_text(encoding="utf-8")
+    assert '"mMount.kcl"' in asm
+    assert '"mount.kcl"' not in asm, "an unprefixed reference would not resolve"
+
+
+def test_the_guide_tells_you_where_to_change_the_position(tmp_path):
+    run = _fake_run(tmp_path / "runs")
+    guide = deliver_mod.deliver(
+        run, tmp_path / "dest", name="m"
+    ).guide_path.read_text(encoding="utf-8")
+    assert "mParameters.kcl" in guide
+    assert "asmX" in guide
+
+
+def test_the_guide_warns_against_translating_the_import(tmp_path):
+    """The trap that would otherwise cost someone an afternoon: it looks like
+    it worked, and only one body actually moved."""
+    run = _fake_run(tmp_path / "runs")
+    guide = deliver_mod.deliver(
+        run, tmp_path / "dest", name="m"
+    ).guide_path.read_text(encoding="utf-8")
+    assert "LAST body" in guide
+    assert "#12" in guide
+
+
+def test_the_guide_separates_the_verified_part_from_the_context(tmp_path):
+    """The mount was checked against a spec. The motor was not, and shipping
+    both without saying which is which is how reference geometry ends up in
+    someone's real design."""
+    run = _fake_run(tmp_path / "runs")
+    guide = deliver_mod.deliver(
+        run, tmp_path / "dest", name="m"
+    ).guide_path.read_text(encoding="utf-8")
+    assert "verified against its spec" in guide
+    assert "Not your hardware" in guide
+
+
+def test_the_mount_geometry_is_not_edited_only_positioned(tmp_path):
+    """The delivered mount must still be the geometry that was verified. The
+    translate is additive and defaults to zero, so at rest it is identical."""
+    run = _fake_run(tmp_path / "runs")
+    deliver_mod.deliver(run, tmp_path / "dest", name="m")
+    delivered = (tmp_path / "dest" / "mMount.kcl").read_text(encoding="utf-8")
+    for line in KCL.strip().splitlines():
+        assert line in delivered, f"generated line lost: {line}"

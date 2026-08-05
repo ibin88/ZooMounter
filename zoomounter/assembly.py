@@ -92,6 +92,25 @@ COLOUR_STANDOFF = "#9aa2ad"
 
 HEADER = "@settings(defaultLengthUnit = mm, kclVersion = 2.0)\n"
 
+# Shared assembly position. Zoo's own axial-fan sample uses exactly this
+# pattern -- a parameters file exported into every part -- so an assembly moves
+# by editing one place rather than by hunting transforms through several files.
+PARAMS_FILE = "parameters.kcl"
+PARAMS_IMPORT = f'import * from "{PARAMS_FILE}"\n'
+
+# EVERY body carries its own translate, and that is not redundancy.
+#
+# `import "multi.kcl" as m` followed by `m |> translate(...)` moves only the
+# LAST body in that module. The earlier ones silently stay at the origin -- no
+# error, no warning, and a half-displaced assembly that looks deliberate.
+# Measured rather than assumed: probes/assembly-translate has the two-body case
+# that proves it, and it is finding #12 in NOTES-FOR-ZOO.md.
+#
+# So the transform goes on each body individually, driven by the shared
+# parameters. It is the only arrangement that actually moves everything.
+TRANSLATE_LINE = "  |> translate(x = asmX, y = asmY, z = asmZ)"
+TRANSLATE = TRANSLATE_LINE + "\n"
+
 COLOUR_COMPONENT = "#3d4756"
 COLOUR_BEARING = "#8a8f98"
 COLOUR_SHAFT = "#c8ccd2"
@@ -123,6 +142,7 @@ def _disc(var: str, plane_z: float, dia: float, length: float, colour: str) -> s
         f"{var}Region = region(segments = [{var}Sketch.profile])\n"
         f"{var}Body = extrude({var}Region, length = {length:g})\n"
         f'  |> appearance(color = "{colour}")\n'
+        f"{TRANSLATE}"
         f"hidden{var} = hide({var}Sketch)\n"
     )
 
@@ -147,6 +167,7 @@ def _ring(var: str, plane_z: float, od: float, bore: float, length: float, colou
         f"{var}InnerExtrude = extrude({var}InnerRegion, length = {length:g})\n"
         f"{var}Body = subtract({var}OuterExtrude, tools = [{var}InnerExtrude])\n"
         f'  |> appearance(color = "{colour}")\n'
+        f"{TRANSLATE}"
         f"hidden{var}Outer = hide({var}OuterSketch)\n"
         f"hidden{var}Inner = hide({var}InnerSketch)\n"
     )
@@ -189,6 +210,7 @@ def _box(
     if not holes or hole_dia <= 0:
         lines.append(f"{var}Body = extrude({var}Region, length = {length:g})")
         lines.append(f'  |> appearance(color = "{colour}")')
+        lines.append(TRANSLATE_LINE)
         lines.append(f"hidden{var} = hide({var}Sketch)")
         return "\n".join(lines) + "\n"
 
@@ -211,6 +233,7 @@ def _box(
         ]
     lines.append(f"{var}Body = subtract({var}Solid, tools = [{', '.join(tools)}])")
     lines.append(f'  |> appearance(color = "{colour}")')
+    lines.append(TRANSLATE_LINE)
     lines.append(f"hidden{var} = hide({var}Sketch)")
     lines += [f"hidden{var}Hole{i} = hide({var}Hole{i}Sketch)" for i in range(len(holes))]
     return "\n".join(lines) + "\n"
@@ -263,6 +286,7 @@ def _standoffs(mount, s: float, body_base: float) -> list[str]:
             f"{var}Region = region(segments = [{var}Sketch.profile])\n"
             f"{var}Body = extrude({var}Region, length = {-s * length:g})\n"
             f'  |> appearance(color = "{COLOUR_STANDOFF}")\n'
+            f"{TRANSLATE}"
             f"hidden{var} = hide({var}Sketch)\n"
         )
     return out
@@ -445,6 +469,71 @@ def bearing_kcl(bearing, mount, thickness_mm: float, explode_mm: float = 0.0) ->
     ])
 
 
+def parameters_kcl() -> str:
+    """The one place an assembly's position lives.
+
+    ZooMounter puts everything at the origin because it does not know where the
+    assembly belongs in your machine -- KCL has no mate or constraint system to
+    express that with. Three numbers in one file is the next best thing: change
+    them and every part moves together, instead of hunting transforms through
+    four files and getting one of them wrong.
+    """
+    return (
+        "// Where this assembly sits in your project.\n"
+        "//\n"
+        "// ZooMounter places everything at the origin: it sized and verified\n"
+        "// the mount, but it has no idea where the assembly belongs in your\n"
+        "// machine. Change these three numbers and every part moves together.\n"
+        "//\n"
+        "// Every body applies these individually and that is deliberate --\n"
+        "// translating a whole imported module moves only its LAST body. See\n"
+        "// finding #12 in NOTES-FOR-ZOO.md.\n"
+        + HEADER
+        + "\nexport asmX = 0\nexport asmY = 0\nexport asmZ = 0\n"
+    )
+
+
+def _with_params(kcl: str) -> str:
+    """Give a part file access to the shared position.
+
+    Inserted after the @settings header, because KCL wants settings first.
+    """
+    if PARAMS_IMPORT.strip() in kcl:
+        return kcl
+    marker = HEADER.rstrip("\n")
+    if marker in kcl:
+        return kcl.replace(marker, marker + "\n" + PARAMS_IMPORT.rstrip("\n"), 1)
+    return PARAMS_IMPORT + kcl
+
+
+def _positioned_mount(mount_kcl: str) -> str:
+    """The Agent API's part, plus a translate driven by the shared parameters.
+
+    Deliberately ADDITIVE: not one line of the generated geometry is edited,
+    and at the default asmX/Y/Z of 0 the result is geometrically identical to
+    what was verified. What is added is a handle to move it by, which the
+    generated script has no way to provide for itself.
+    """
+    from . import zoo_project
+
+    body = zoo_project.last_assignment(mount_kcl)
+    if body is None:
+        # Nothing to hang a transform on. Say so in the file rather than
+        # silently shipping an assembly whose mount ignores the parameters.
+        return (
+            mount_kcl.rstrip()
+            + "\n\n// NOTE: ZooMounter could not find a final assignment to\n"
+            "// position, so this part ignores parameters.kcl and stays at the\n"
+            "// origin. Move it by hand.\n"
+        )
+    return (
+        mount_kcl.rstrip()
+        + f"\n\n// Positioned from {PARAMS_FILE}. The geometry above is exactly\n"
+        "// what was generated and verified; only the placement is added.\n"
+        f"{body}\n{TRANSLATE}"
+    )
+
+
 def main_kcl(parts: list[AssemblyPart]) -> str:
     """The assembly file: imports only.
 
@@ -484,7 +573,7 @@ def write_assembly(
         raise ValueError(f"mounting face must be one of {MOUNTING_FACES}, got {face!r}")
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    parts = [AssemblyPart("mount", "mount.kcl", mount_kcl, "mount")]
+    parts = [AssemblyPart("mount", "mount.kcl", _positioned_mount(mount_kcl), "mount")]
 
     body = component_kcl(base_mount or mount, thickness_mm, face, explode_mm)
     if body:
@@ -497,8 +586,9 @@ def write_assembly(
                          "bearing")
         )
 
+    (output_dir / PARAMS_FILE).write_text(parameters_kcl(), encoding="utf-8")
     for p in parts:
-        (output_dir / p.filename).write_text(p.kcl, encoding="utf-8")
+        (output_dir / p.filename).write_text(_with_params(p.kcl), encoding="utf-8")
 
     main_path = output_dir / "main.kcl"
     main_path.write_text(main_kcl(parts), encoding="utf-8")

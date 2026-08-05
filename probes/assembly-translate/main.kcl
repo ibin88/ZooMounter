@@ -1,0 +1,6 @@
+@settings(defaultLengthUnit = mm, kclVersion = 2.0)
+import * from "params.kcl"
+import "multi.kcl" as multi
+
+multi
+  |> translate(x = asmX, y = asmY, z = asmZ)

@@ -1,0 +1,13 @@
+@settings(defaultLengthUnit = mm, kclVersion = 2.0)
+a = sketch(on = XY) {
+  profile = circle(start = [10mm, 0mm], center = [0mm, 0mm])
+  diameter(profile) == 20mm
+}
+bodyA = extrude(region(segments = [a.profile]), length = 5)
+  |> appearance(color = "#334455")
+c = sketch(on = offsetPlane(XY, offset = 5)) {
+  profile = circle(start = [4mm, 0mm], center = [0mm, 0mm])
+  diameter(profile) == 8mm
+}
+bodyB = extrude(region(segments = [c.profile]), length = 10)
+  |> appearance(color = "#99aabb")

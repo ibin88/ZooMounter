@@ -302,6 +302,15 @@ status     = "standard"
 remedy     = "Position it yourself with |> translate(...) and |> rotate(...). The generated import is left un-positioned on purpose -- a guessed transform is harder to find and fix than an obvious zero."
 
 [[rule]]
+id         = "translate_moves_only_the_last_body"
+statement  = "Applying translate to a whole imported KCL module moves only the LAST body in it; earlier bodies silently stay where they were, with no error, so every body in a multi-part assembly must carry its own transform."
+applies_to = {}
+source     = "Measured, not assumed. probes/assembly-translate exports a two-body module with `m |> translate(x = 100)`: the last body lands at x=100 and the first stays at x=0. Reproduced in probes/, and written up as finding #12 in NOTES-FOR-ZOO.md."
+severity   = "warn"
+status     = "measured-against-api"
+remedy     = "Drive every body from a shared parameters file instead of translating the module. ZooMounter's delivered assemblies do this, which is why each part imports parameters.kcl."
+
+[[rule]]
 id         = "reference_geometry_is_not_your_hardware"
 statement  = "The motor and bearing bodies drawn in an assembly are catalogue context, not models of the user's specific parts, and must not be imported into a real design."
 applies_to = {}
