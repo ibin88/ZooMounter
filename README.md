@@ -424,7 +424,10 @@ minutes and API credits generating a part. The tool descriptions say so
 explicitly.
 
 **Claude Code** — a `.mcp.json` is included; it's picked up automatically when
-you open this folder.
+you open this folder. It calls the `zoomounter-mcp` console script rather than
+naming an interpreter, so it works from a clone with no editing — as long as
+the environment you installed into is the one on your PATH. If the server
+fails to start, that's the thing to check.
 
 **Gemini CLI** — add the same block to `~/.gemini/settings.json`.
 
