@@ -22,7 +22,17 @@ from rich.panel import Panel
 from rich.prompt import FloatPrompt, IntPrompt, Prompt
 from rich.table import Table
 
-from . import application, bearings, generate, kcl_inspect, mechanics, verify, zoo_project
+from . import (
+    application,
+    bearings,
+    deliver as deliver_mod,
+    generate,
+    kcl_inspect,
+    mechanics,
+    verify,
+    workspace,
+    zoo_project,
+)
 from .config import load_environment
 from .materials import MATERIALS, get_material
 from .mount_specs import EXTRUSION_SERIES, MOUNTS, get_mount
@@ -31,13 +41,22 @@ from .verify import POSITION_TOLERANCE_MM
 console = Console()
 
 
-def default_output_dir(mount_key: str, material_key: str, base: str = "output") -> Path:
+def default_output_dir(
+    mount_key: str, material_key: str, base: str | Path | None = None
+) -> Path:
     """Each run gets its own uniquely-named subfolder (mount + material +
     timestamp) so repeat runs don't overwrite each other's Zoo Design Studio
     project, and pointing the app at `base` shows a clean list of distinct
-    generated parts instead of one folder that keeps getting replaced."""
+    generated parts instead of one folder that keeps getting replaced.
+
+    `base` now defaults to ZooMounter's own workspace rather than `./output`.
+    The whole point of putting this on your PATH is to run it from inside your
+    CAD project, and a generator that scatters build folders through someone's
+    source tree is one people stop running. See workspace.runs_dir().
+    """
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    return Path(base) / f"{mount_key}_{material_key}_{stamp}"
+    root = Path(base) if base else workspace.runs_dir()
+    return root / f"{mount_key}_{material_key}_{stamp}"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -89,7 +108,62 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--output-dir",
         default=None,
-        help="Where to write the generated files (default: a uniquely-named folder under ./output, e.g. output/nema17_aluminum_6061_20260724_143022)",
+        help="Write this run to an exact path instead of a generated one under the workspace.",
+    )
+
+    ws = p.add_argument_group("Workspace and retention")
+    ws.add_argument(
+        "--runs-dir",
+        default=None,
+        metavar="PATH",
+        help="Where run folders go. Defaults to $ZOOMOUNTER_HOME/runs, else "
+        "~/.zoomounter/runs. Never the current directory -- a generator that "
+        "scatters build folders through your source tree is one you stop running. "
+        "NOTE: this is storage. --workspace is an engineering input and means "
+        "something entirely different.",
+    )
+    ws.add_argument(
+        "--keep-runs",
+        type=int,
+        default=workspace.DEFAULT_KEEP_RUNS,
+        metavar="N",
+        help=f"Keep the N most recent runs and delete older ones "
+        f"(default: {workspace.DEFAULT_KEEP_RUNS}).",
+    )
+    ws.add_argument(
+        "--no-prune",
+        action="store_true",
+        help="Keep every run and every file in it, including the exploded "
+        "assembly that exists only to be photographed.",
+    )
+
+    deliver_group = p.add_argument_group("Deliver a finished run")
+    deliver_group.add_argument(
+        "--deliver",
+        metavar="RUN_DIR",
+        default=None,
+        help="Take a finished run and write a usable part elsewhere: the mount "
+        "KCL with its export line, a STEP for any other CAD tool, and a "
+        "HOW-TO-USE.md. Use with --to. Generates nothing and costs nothing.",
+    )
+    deliver_group.add_argument(
+        "--to",
+        metavar="DEST",
+        default=None,
+        help="Destination for --deliver. If it is inside a Zoo project, the part "
+        "is imported into that project's main.kcl as well.",
+    )
+    deliver_group.add_argument(
+        "--name",
+        default="zooMount",
+        help="Name for the delivered part and its export line (default: zooMount).",
+    )
+    deliver_group.add_argument(
+        "--add-to",
+        metavar="PATH",
+        default=None,
+        help="Like --add, but into a project at PATH rather than the one you are "
+        "standing in. Use with --add NAME to set the part name.",
     )
 
     host_mount = p.add_argument_group("Host-side mounting options (Tier 1)")
@@ -749,47 +823,104 @@ provenance statuses are for. See `RULES.md`.*
     path.write_text(report, encoding="utf-8")
 
 
-def _add_to_project(args, mount, material, thickness, kcl_code: str) -> int:
-    """Write the generated part into the surrounding Zoo project and wire it in."""
-    project = zoo_project.find_project()
-    if project is None:  # pragma: no cover -- guarded earlier in main()
-        console.print("[red]error:[/red] not inside a Zoo project.")
-        return 1
+def _add_to_project(args, mount, material, thickness, kcl_code, run_dir, decision=None) -> int:
+    """`--add` / `--add-to`, now a thin wrapper over the deliver step.
 
+    It used to write the part and the import itself, which meant the two paths
+    into a project could drift -- and the GUI, which had neither, drifted
+    furthest of all. Everything now goes through deliver.deliver(), so a part
+    that arrives via --add carries the same HOW-TO-USE.md and the same warnings
+    as one delivered later from a saved run.
+    """
+    dest = Path(args.add_to) if args.add_to else Path.cwd()
     comment = (
         f"{mount.name} in {material.name}, {args.shaft_load_n}N {args.load_type} shaft load, "
         f"SF {args.safety_factor} -> {thickness.required_thickness_mm:.2f}mm thick "
         f"(set by {thickness.governing_limit})"
     )
+
+    # Carry the run's findings with the part. A delivered mount that arrives
+    # without its BEARING REQUIRED verdict is the failure this tool exists to
+    # prevent, committed by the tool itself.
+    carried = list(thickness.notes)
+    if decision is not None:
+        carried = list(decision.checks) + carried
+
     try:
-        part_path, entry_modified = zoo_project.add_part(
-            project, args.add, kcl_code, comment=comment
+        result = deliver_mod.deliver(
+            run_dir=run_dir, dest=dest, name=args.add,
+            checks=carried, comment=comment,
         )
-    except zoo_project.ProjectError as e:
+    except (deliver_mod.DeliveryError, zoo_project.ProjectError, OSError) as e:
         console.print(f"[red]error:[/red] {e}")
         return 1
 
-    console.print(f"[green]Added to project '{project.name}':[/green] {part_path.name}")
-    if entry_modified:
-        console.print(f"  [dim]imported from {project.entry.name} and instantiated[/dim]")
+    if result.project is not None:
+        console.print(
+            f"[green]Added to project '{result.project.name}':[/green] "
+            f"{result.kcl_path.name}"
+        )
+        if result.entry_modified:
+            console.print(
+                f"  [dim]imported from {result.project.entry.name} and instantiated[/dim]"
+            )
+        else:
+            console.print(
+                f"  [dim]{result.project.entry.name} already imported it -- "
+                f"part file updated in place[/dim]"
+            )
+    else:
+        console.print(f"[green]Written:[/green] {result.kcl_path}")
+    console.print(f"  [dim]{comment}[/dim]")
+    console.print(f"  [dim]How to use it: {result.guide_path}[/dim]")
+    _print_checks(result.checks)
+    if result.project is not None:
+        console.print(
+            f"\n[dim]Reload the project in Design Studio to see it, or:[/dim] "
+            f"zoo app {result.project.root}"
+        )
+    return 0
+
+
+def run_deliver(args) -> int:
+    """`--deliver RUN --to DEST`. Costs nothing and generates nothing.
+
+    Separate from the generate path on purpose: delivering is the step people
+    repeat, and making them re-run a 1-3 minute credit-spending generation to
+    get the same part into a second project would be absurd.
+    """
+    if not args.to:
+        console.print("[red]error:[/red] --deliver needs --to DEST.")
+        return 2
+    try:
+        result = deliver_mod.deliver(
+            run_dir=Path(args.deliver), dest=Path(args.to), name=args.name
+        )
+    except (deliver_mod.DeliveryError, zoo_project.ProjectError, OSError) as e:
+        console.print(f"[red]error:[/red] {e}")
+        return 1
+
+    console.print(f"[green]Delivered:[/green] {result.kcl_path}")
+    if result.step_path:
+        console.print(f"[green]STEP:[/green] {result.step_path}")
+    console.print(f"[green]Guide:[/green] {result.guide_path}")
+    if result.project is not None:
+        if result.entry_modified:
+            console.print(
+                f"  [dim]imported from {result.project.entry.name} in "
+                f"'{result.project.name}'[/dim]"
+            )
+        else:
+            console.print(
+                f"  [dim]{result.project.entry.name} already imported it -- part "
+                f"file updated in place[/dim]"
+            )
     else:
         console.print(
-            f"  [dim]{project.entry.name} already imported it -- part file updated in place[/dim]"
+            "  [dim]not a Zoo project, so nothing was wired up -- "
+            "HOW-TO-USE.md has the import line to paste[/dim]"
         )
-    console.print(f"  [dim]{comment}[/dim]")
-    for note in thickness.notes:
-        if note.level == "LOUD WARN":
-            style = "bold red"
-        elif note.level == "WARN":
-            style = "yellow"
-        elif note.level == "PASS":
-            style = "green"
-        else:
-            style = "dim"
-        console.print(f"  [{style}]- {note}[/{style}]")
-    console.print(
-        f"\n[dim]Reload the project in Design Studio to see it, or:[/dim] zoo app {project.root}"
-    )
+    _print_checks(result.checks)
     return 0
 
 
@@ -799,10 +930,28 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
+    if args.deliver:
+        return run_deliver(args)
+
+    # --add-to names the project, so there is nothing to walk up from.
+    if args.add_to:
+        if not args.add:
+            console.print(
+                "[red]error:[/red] --add-to PATH needs --add NAME to say what "
+                "the part should be called."
+            )
+            return 2
+        if zoo_project.find_project(Path(args.add_to)) is None:
+            console.print(
+                f"[red]error:[/red] no Zoo project at or above {args.add_to} "
+                f"(looking for a folder with a project.toml)."
+            )
+            return 1
+
     # Check this before generating: --add is a 1-3 minute, credit-spending
     # round trip, and discovering afterwards that there was nowhere to put the
     # result is a rotten way to find out.
-    if args.add and zoo_project.find_project() is None:
+    if args.add and not args.add_to and zoo_project.find_project() is None:
         console.print(
             "[red]error:[/red] --add needs to be run from inside a Zoo project "
             "(a folder with a project.toml, or any subfolder of one)."
@@ -1015,18 +1164,32 @@ def main(argv: list[str] | None = None) -> int:
     def on_status(elapsed: float, status: str) -> None:
         spinner.update(f"[bold cyan]Generating via Zoo Agent API...[/bold cyan] {status} ({elapsed:.0f}s elapsed)")
 
-    output_dir = Path(args.output_dir) if args.output_dir else default_output_dir(args.mount, args.material)
+    output_dir = (
+        Path(args.output_dir)
+        if args.output_dir
+        else default_output_dir(
+            args.mount, args.material, base=workspace.runs_dir(args.runs_dir)
+        )
+    )
     console.print(f"[dim]Output folder:[/dim] {output_dir}\n")
 
     try:
         with console.status("[bold cyan]Generating via Zoo Agent API...[/bold cyan] submitting...") as spinner:
             kcl_code = generate.generate_kcl(prompt, on_status=on_status)
 
+            # Write the run first even for --add. It used to short-circuit
+            # here and write nothing, which meant the two ways a part reaches a
+            # project took different code paths and drifted apart. Now --add is
+            # an ordinary run plus a delivery, so it leaves the same artifacts,
+            # gets the same retention, and can be re-delivered later without
+            # spending credits again.
+            kcl_path = generate.write_kcl_project(kcl_code, output_dir)
+
             if args.add:
                 spinner.stop()
-                return _add_to_project(args, mount, material, thickness, kcl_code)
-
-            kcl_path = generate.write_kcl_project(kcl_code, output_dir)
+                return _add_to_project(
+                    args, mount, material, thickness, kcl_code, output_dir, decision
+                )
 
             if scheme is not None:
                 spinner.stop()
@@ -1077,7 +1240,43 @@ def main(argv: list[str] | None = None) -> int:
     else:
         console.print(Panel.fit("[bold red]FAIL[/bold red]", border_style="red"))
     console.print(f"[dim]Report:[/dim] {report_path}")
+
+    _prune(args, output_dir)
+    console.print(
+        f"[dim]Deliver it anywhere with:[/dim] zoomounter --deliver "
+        f"{output_dir} --to <your-project>"
+    )
     return 0
+
+
+def _prune(args, output_dir: Path) -> None:
+    """Slim this run and drop old ones, saying so rather than doing it silently.
+
+    A tool that deletes things without mentioning it is one you stop trusting
+    with a --runs-dir, so both the trimming and any refusal are printed.
+    """
+    if args.no_prune:
+        return
+    root = workspace.runs_dir(args.runs_dir)
+    # An --output-dir run is not in the workspace at all, so only trim it.
+    if args.output_dir:
+        if workspace.trim_run(output_dir):
+            console.print("[dim]Removed the exploded assembly (render-only).[/dim]")
+        return
+
+    result = workspace.prune_runs(
+        root, keep=args.keep_runs, user_supplied=bool(args.runs_dir)
+    )
+    if result.refused:
+        console.print(f"[dim]Not pruning: {result.refused}[/dim]")
+        return
+    if result.trimmed:
+        console.print("[dim]Removed the exploded assembly (render-only).[/dim]")
+    if result.removed:
+        console.print(
+            f"[dim]Pruned {len(result.removed)} older run(s), keeping the most "
+            f"recent {args.keep_runs}. Use --keep-runs N or --no-prune.[/dim]"
+        )
 
 
 if __name__ == "__main__":

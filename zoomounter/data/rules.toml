@@ -289,6 +289,28 @@ status     = "derived"
 remedy     = "Use the stub-shaft topology instead. If you keep this one, hold the seat concentric to the bolt pattern, expect the relief to be partial, and do not rely on it for thrust at all."
 
 # ---------------------------------------------------------------------------
+# Delivery. What travels with a part when it leaves this tool.
+# ---------------------------------------------------------------------------
+
+[[rule]]
+id         = "delivered_at_origin"
+statement  = "A delivered part is placed at the origin, because ZooMounter does not know where it belongs in the assembly and KCL has no mate or constraint system to express that with."
+applies_to = {}
+source     = "KCL has sketch constraints but no assembly mates; assembly positioning is manual translate/rotate arithmetic. Open roadmap item with a public spec, and finding #11 in NOTES-FOR-ZOO.md."
+severity   = "warn"
+status     = "standard"
+remedy     = "Position it yourself with |> translate(...) and |> rotate(...). The generated import is left un-positioned on purpose -- a guessed transform is harder to find and fix than an obvious zero."
+
+[[rule]]
+id         = "reference_geometry_is_not_your_hardware"
+statement  = "The motor and bearing bodies drawn in an assembly are catalogue context, not models of the user's specific parts, and must not be imported into a real design."
+applies_to = {}
+source     = "They are derived entirely from fields in data/mounts.toml and data/bearings.toml -- frame size, shaft diameter, bore and width. Nothing else about any particular motor is known to this tool."
+severity   = "warn"
+status     = "derived"
+remedy     = "Use the manufacturer's STEP for the real components. Only the mount itself is verified against a spec."
+
+# ---------------------------------------------------------------------------
 # Declared limitations. No evaluator -- these are things the tool does NOT
 # check, recorded so their absence is visible rather than implied.
 # ---------------------------------------------------------------------------

@@ -145,6 +145,9 @@ design and just realised I need one."* For that:
 ```bash
 cd my-zoo-project
 zoomounter --mount nema23 --material aluminum_6061 --shaft-load-n 120 --load-type axial --add xMotorMount
+
+# or, from anywhere, by naming the project:
+zoomounter --mount nema23 --material aluminum_6061 --shaft-load-n 120 --add xMotorMount --add-to ~/projects/my-gantry
 ```
 
 That's the whole thing. ZooMounter finds your Zoo project by walking up from
@@ -226,10 +229,44 @@ python -m zoomounter.cli --mount nema23 --material aluminum_6061 \
 python -m zoomounter.cli --mount nema17 --material petg --shaft-load-n 40 --no-export
 ```
 
-Every run writes to its own timestamped folder under `./output/`, containing
-`main.kcl` + `project.toml` (**open the `output/` folder in Zoo Design Studio**
-— not the repo root — to see each generated part as its own project),
-`export/output.step`, and `inspection_report.md`.
+### Where runs go, and how you get a part out
+
+Runs go to **`~/.zoomounter/runs/`** (or `$ZOOMOUNTER_HOME/runs`, or
+`--runs-dir PATH`) — never to the folder you are standing in. Each gets its own
+timestamped subfolder with `main.kcl`, `export/output.step`, `preview.png`,
+`inspection_report.md` and an `assembly/` you can open in Design Studio.
+
+Those are working files. To get a part into a real design:
+
+```bash
+zoomounter --deliver ~/.zoomounter/runs/nema23_aluminum_6061_20260805_143022 --to ~/projects/my-gantry --name xMotorMount
+```
+
+That writes three things into the destination:
+
+| File | For |
+|---|---|
+| `xMotorMount.kcl` | Zoo — **with the `export` line appended**, which the Agent API does not emit and which `import` requires |
+| `xMotorMount.step` | Fusion, SolidWorks, Onshape, FreeCAD, anything |
+| `HOW-TO-USE.md` | What to do with them, and what ZooMounter did *not* do |
+
+If the destination is a Zoo project, the `import` line is added to its
+`main.kcl` too. Delivering costs nothing and generates nothing, so the same run
+can go into as many projects as you like.
+
+**`HOW-TO-USE.md` states two things the tool cannot do**, because an unstated
+limitation reads as a solved problem. The part is placed at the **origin** —
+ZooMounter has no idea where it belongs in your machine, and KCL has no mate or
+constraint system to express that with (finding #11 in
+[NOTES-FOR-ZOO.md](NOTES-FOR-ZOO.md)). And the motor and bearing bodies in
+`assembly/` are catalogue *context*, not models of your specific hardware. It
+also repeats the run's shaft verdict — a delivered part that arrives without its
+warnings defeats the point of having computed them.
+
+Old runs are pruned to the most recent 5 (`--keep-runs N`, `--no-prune`), and
+the exploded assembly is dropped once its preview exists. Pruning only ever
+touches ZooMounter's own workspace — never a `--runs-dir` you supplied, and
+never anything inside a git repo.
 
 ### Mount types
 

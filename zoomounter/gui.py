@@ -32,7 +32,8 @@ import customtkinter as ctk
 from PIL import Image
 
 from . import bearings as bearings_mod
-from . import generate, mechanics, verify
+from . import deliver as deliver_mod
+from . import generate, mechanics, verify, workspace
 from .config import load_environment
 from .cli import default_output_dir, write_report
 from .materials import MATERIALS, get_material
@@ -65,8 +66,11 @@ class App(ctk.CTk):
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=1)
 
-        self.output_dir = Path("output")
+        self.output_dir = workspace.runs_dir()
         self.generation_running = False
+        # Carried into a delivered part, so the warnings travel with the file.
+        self._last_thickness_notes = []
+        self._last_decision_checks = []
 
         self._build_form()
         self._build_results()
@@ -249,16 +253,23 @@ class App(ctk.CTk):
             form, row, "Shaft load offset (mm, blank=auto, radial only)", ""
         )
         row += 1
-        ctk.CTkLabel(form, text="Output base folder").grid(row=row, column=0, sticky="w")
+        self.part_name_var = self._labeled_entry(form, row, "Part name (for delivery)", "zooMount")
+        row += 1
+        ctk.CTkLabel(form, text="Run storage folder").grid(row=row, column=0, sticky="w")
         output_row = ctk.CTkFrame(form, fg_color="transparent")
         output_row.grid(row=row, column=1, sticky="ew", pady=4)
         output_row.grid_columnconfigure(0, weight=1)
-        self.output_base_var = ctk.StringVar(value="output")
+        # Defaults to ZooMounter's own workspace rather than a relative
+        # "output" -- runs are working files, not deliverables, and writing
+        # them next to whatever folder the app happened to start in is how a
+        # tool ends up scattered through someone's project.
+        self.output_base_var = ctk.StringVar(value=str(workspace.runs_dir()))
         ctk.CTkEntry(output_row, textvariable=self.output_base_var).grid(row=0, column=0, sticky="ew", padx=(0, 4))
         ctk.CTkButton(output_row, text="Browse…", width=70, command=self._browse_output_folder).grid(row=0, column=1)
         ctk.CTkLabel(
             form,
-            text="Each run gets its own subfolder here (mount_material_timestamp) so nothing overwrites.",
+            text="Working files only -- each run gets its own subfolder here. To put a part "
+            "into a project, use the buttons under the results when the run finishes.",
             font=ctk.CTkFont(size=11),
             text_color="gray60",
             anchor="w",
@@ -781,10 +792,118 @@ class App(ctk.CTk):
         self.overall_label = ctk.CTkLabel(panel, text="", font=ctk.CTkFont(size=22, weight="bold"))
         self.overall_label.grid(row=4, column=0, pady=4)
 
+        # A finished run used to end here, with one button that opened a
+        # folder. The user then had to find the mount among four KCL files and
+        # hand-write the export line the Agent API never emits -- the one step
+        # that is genuinely hard to get right by hand.
+        deliver_row = ctk.CTkFrame(panel, fg_color="transparent")
+        deliver_row.grid(row=5, column=0, sticky="ew", padx=12, pady=(4, 2))
+        deliver_row.grid_columnconfigure((0, 1, 2), weight=1)
+        self.deliver_buttons = []
+        for col, (label, command) in enumerate((
+            ("Add to project…", self._deliver_to_project),
+            ("Copy KCL", self._copy_kcl),
+            ("Save STEP as…", self._save_step_as),
+        )):
+            b = ctk.CTkButton(deliver_row, text=label, state="disabled", command=command)
+            b.grid(row=0, column=col, sticky="ew", padx=2)
+            self.deliver_buttons.append(b)
+
         self.open_folder_button = ctk.CTkButton(
-            panel, text="Open output folder", state="disabled", command=self._open_output_folder
+            panel, text="Open run folder", state="disabled",
+            command=self._open_output_folder, fg_color="transparent",
+            border_width=1,
         )
-        self.open_folder_button.grid(row=5, column=0, sticky="ew", padx=12, pady=(4, 12))
+        self.open_folder_button.grid(row=6, column=0, sticky="ew", padx=12, pady=(2, 12))
+
+    # ---- delivering a finished run ---------------------------------------
+    #
+    # Three buttons rather than one, because "get this part into my design"
+    # has three real answers and the tool used to offer none of them.
+    #
+    # There is deliberately NO "paste this prompt into Design Studio" button.
+    # Pasting a prompt regenerates the part in Zookeeper: different geometry,
+    # unverified, not repeatable. Avoiding exactly that is why this tool exists,
+    # so offering it as a convenience would undo the whole argument.
+
+    def _enable_delivery(self, enabled: bool) -> None:
+        state = "normal" if enabled else "disabled"
+        for b in getattr(self, "deliver_buttons", []):
+            b.configure(state=state)
+
+    def _run_checks(self) -> list:
+        """Warnings from the finished run, to travel with the delivered part."""
+        checks = list(getattr(self, "_last_thickness_notes", []))
+        return list(getattr(self, "_last_decision_checks", [])) + checks
+
+    def _deliver_to_project(self) -> None:
+        dest = filedialog.askdirectory(title="Deliver the part into which folder?")
+        if not dest:
+            return
+        name = self.part_name_var.get().strip() or "zooMount"
+        try:
+            result = deliver_mod.deliver(
+                run_dir=self.output_dir, dest=Path(dest), name=name,
+                checks=self._run_checks(),
+            )
+        except Exception as e:  # noqa: BLE001 -- surfaced to the user, not swallowed
+            self.status_label.configure(text=f"Deliver failed: {e}", text_color="#e05252")
+            return
+
+        if result.project is not None and result.entry_modified:
+            msg = f"Added to '{result.project.name}' and imported in {result.project.entry.name}."
+        elif result.project is not None:
+            msg = f"Updated in '{result.project.name}' ({result.project.entry.name} already imported it)."
+        else:
+            msg = "Written. Not a Zoo project, so see HOW-TO-USE.md for the import line."
+        self.status_label.configure(text=msg, text_color="#2fa572")
+        self._append_results(
+            "\n" + "-" * 60 + "\n"
+            + result.guide_path.read_text(encoding="utf-8")
+        )
+
+    def _copy_kcl(self) -> None:
+        """The generated KCL with its export line -- not the prompt."""
+        try:
+            kcl = deliver_mod.kcl_for_clipboard(
+                self.output_dir, self.part_name_var.get().strip() or "zooMount"
+            )
+        except Exception as e:  # noqa: BLE001
+            self.status_label.configure(text=f"Copy failed: {e}", text_color="#e05252")
+            return
+        self.clipboard_clear()
+        self.clipboard_append(kcl)
+        self.status_label.configure(
+            text="KCL copied, export line included. Paste into a Design Studio file.",
+            text_color="#2fa572",
+        )
+
+    def _save_step_as(self) -> None:
+        src = deliver_mod.find_step(self.output_dir)
+        if src is None:
+            self.status_label.configure(
+                text="No STEP in this run -- it was a preview-only run.",
+                text_color="#e0a052",
+            )
+            return
+        dest = filedialog.asksaveasfilename(
+            title="Save STEP", defaultextension=".step",
+            initialfile=f"{self.part_name_var.get().strip() or 'zooMount'}.step",
+            filetypes=[("STEP", "*.step *.stp"), ("All files", "*.*")],
+        )
+        if not dest:
+            return
+        Path(dest).write_bytes(src.read_bytes())
+        self.status_label.configure(
+            text=f"Saved {Path(dest).name}. Opens in Fusion, SolidWorks, Onshape, FreeCAD.",
+            text_color="#2fa572",
+        )
+
+    def _append_results(self, text: str) -> None:
+        self.results_text.configure(state="normal")
+        self.results_text.insert("end", text)
+        self.results_text.see("end")
+        self.results_text.configure(state="disabled")
 
     def _show_preview_image(self, image_path: Path) -> None:
         # Read fully into memory and decode from bytes rather than keeping a
@@ -931,6 +1050,9 @@ class App(ctk.CTk):
             material=material,
             plate_load_n=float(self.plate_load_var.get() or 0),
         )
+
+        self._last_thickness_notes = list(thickness.notes)
+        self._last_decision_checks = list(decision.checks) if decision else []
 
         if self._selected_bearing is not None:
             thickness.notes.extend(selection.notes)
@@ -1389,6 +1511,7 @@ class App(ctk.CTk):
         self.generation_running = False
         self.generate_button.configure(state="normal", text="Generate && Verify")
         self.open_folder_button.configure(state="normal")
+        self._enable_delivery(True)
         self.status_label.configure(
             text=f"Preview only -- no STEP file or verification generated. Project: {self.output_dir}",
             text_color=("black", "white"),
@@ -1399,6 +1522,7 @@ class App(ctk.CTk):
         self.generation_running = False
         self.generate_button.configure(state="normal", text="Generate && Verify")
         self.open_folder_button.configure(state="normal")
+        self._enable_delivery(True)
         self.status_label.configure(text=f"Done. Report: {report_path}", text_color=("black", "white"))
 
         lines = []
