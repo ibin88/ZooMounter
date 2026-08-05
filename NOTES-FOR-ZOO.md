@@ -329,5 +329,47 @@ chamfers all work**, and the volume-verified ones came back exact.
 
 ---
 
+## 10. The Agent API is repeatable, and nobody says so
+
+Section 7 says the Agent API hits specified coordinates exactly. That was
+measured one shape at a time. It leaves the more important question open:
+**does the same prompt return the same geometry twice?**
+
+For a generative endpoint that is not obvious, and the failure mode is nasty.
+A model that is accurate on average but not repeatable passes every
+verification run individually and still breaks things — the part you showed a
+colleague yesterday is not the part they get today, and a regression test on
+generated geometry can never be written.
+
+So I measured it. `probes/determinism.py` sends one fixed prompt N times,
+exports each result to STEP, and diffs the parsed geometry rather than the KCL
+text — two files can differ in variable order or whitespace and describe the
+same solid, so source comparison answers a less interesting question.
+
+**Result: identical across 3 runs.** Same nine holes, same positions, same
+diameters, same bounding box. The fingerprints are in
+`probes/determinism/summary.json`.
+
+```
+[1/3] 9 holes, bbox [100.0, 56.4, 7.0]
+[2/3] 9 holes, bbox [100.0, 56.4, 7.0]
+[3/3] 9 holes, bbox [100.0, 56.4, 7.0]
+IDENTICAL across 3 runs: same holes, same bounding box.
+```
+
+Three runs is not proof of determinism — it is enough to rule out obvious
+run-to-run drift on a well-specified prompt, and not enough to say anything
+about loosely-specified ones, which I would expect to behave differently.
+
+**Why this is worth publishing:** repeatability is the property that makes the
+Agent API usable in a build pipeline rather than only in a design session. If
+Zoo is willing to state it — even scoped, as "geometry is stable for prompts
+that fully constrain their dimensions" — that is a much stronger claim than
+"text to CAD", and it is the one an engineer integrating the API actually
+needs to hear. Right now the docs are silent on it, so every serious user has
+to run this experiment themselves.
+
+---
+
 *Findings from building [ZooMounter](https://github.com/ibin88/ZooMounter) for
-the Zoo API Makeathon, July 2026. Happy to expand on any of these.*
+the Zoo API Makeathon, July-August 2026. Happy to expand on any of these.*

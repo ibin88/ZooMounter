@@ -1,0 +1,22 @@
+Define these named parameters at the top of the file, using exactly these names. Where an expression is given, write the expression -- do not replace it with a pre-computed number:
+
+  plateThickness   = 7mm
+  plateHeight      = 56.4mm
+  boltHoleDia      = 5.5mm
+  boltSpacing      = 47.14mm
+  boltHoleOffset   = boltSpacing / 2
+  centerHoleDia    = 38.1mm
+  slotSpacing      = 80mm
+  slotLength       = 15mm
+  slotWidth        = 5.5mm
+  edgeMargin       = 10mm
+  slotCenterOffset = slotSpacing / 2
+  plateWidth       = slotSpacing + 2 * edgeMargin
+
+Then build the part from those parameters, referring to them by name rather than repeating their values:
+
+A flat rectangular mounting plate, plateWidth wide (x-axis) by plateHeight tall (y-axis) by plateThickness thick, centered at the origin.
+It has 4 through-holes of boltHoleDia diameter, centered at (-boltHoleOffset, -boltHoleOffset), (boltHoleOffset, -boltHoleOffset), (boltHoleOffset, boltHoleOffset) and (-boltHoleOffset, boltHoleOffset).
+It also has a through-hole of centerHoleDia diameter centered on the plate.
+It also has 2 adjustment slots cut through the full thickness, each slotLength long along the y-axis and slotWidth wide with semicircular ends, centered at (-slotCenterOffset, 0) and (slotCenterOffset, 0).
+All holes and slots go through the full thickness of the plate.
