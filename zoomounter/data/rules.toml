@@ -325,6 +325,16 @@ remedy     = "Use the manufacturer's STEP for the real components. Only the moun
 # ---------------------------------------------------------------------------
 
 [[rule]]
+id         = "load_model_is_rudimentary"
+statement  = "The load model is rudimentary and covers a narrow set of cases: it checks ONE load, in ONE direction, at ONE offset, against a published rating -- and the load itself is a number the user supplied rather than one this tool derived."
+applies_to = {}
+source     = "Its own inputs. --shaft-load-n is whatever you type; there is no torque, speed, duty cycle or transmission geometry to derive it from, and deriving it was cut deliberately rather than done badly. Radial and axial cannot be combined in one run. The default offset is 15mm, which is a placeholder no mount in the catalogue overrides, while every radial rating on file is measured at 20mm. And --safety-factor does not reach the shaft verdict at all: it applies to bearing selection only, so a load at 99% of a published maximum reads SHAFT OK however high you set it."
+severity   = "warn"
+status     = "derived"
+evaluated  = false
+remedy     = "Treat the verdict as a check on the number you supplied, not as a check on your machine. Pass --overhang-mm with the real distance your load acts at, run radial and axial separately and take the worse, and read a PASS as 'within the published rating at the numbers given' rather than 'safe'."
+
+[[rule]]
 id         = "reaction_torque_unmodelled"
 statement  = "A motor's reaction torque is not modelled, though it is present whenever the motor runs and is reacted as shear in the bolt pattern at the bolt-circle radius."
 applies_to = { kind = "motor" }

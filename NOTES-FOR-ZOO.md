@@ -484,5 +484,185 @@ assembly" and nothing suggests it collapses to one solid.
 
 ---
 
+## 13. What I think Zoo should own, and what I should not have had to build
+
+Everything below I built because it was missing, not because it belonged in a
+mount generator. Each one is a thing every serious user of the Agent API will
+hit, will solve privately, and will solve worse than Zoo could.
+
+### 13.1 Verification of generated geometry against a spec
+
+This is the big one, and it is the reason this project exists.
+
+I ask the Agent API for a plate with four holes at exact coordinates. I get
+KCL back. Nothing in the platform tells me whether the holes landed where I
+asked. So I wrote a STEP parser that pulls `CIRCLE → AXIS2_PLACEMENT_3D →
+CARTESIAN_POINT` out of the export and compares every hole centre and diameter
+to what was requested.
+
+Everyone building on text-to-CAD needs this. Most will approximate it with a
+volume or bounding-box check, which is the trap I fell into first: a correct
+plate and one with a bolt hole displaced 2mm differ by **0.004% in volume**,
+and both pass. One of them is scrap.
+
+Zoo is uniquely placed to do this properly, because the File Format API already
+measures geometry and the Agent API already knows what was asked. Something like:
+
+```
+POST /file/conforms-to
+{
+  "file": <STEP or KCL>,
+  "expect": {
+    "holes": [{"x": 15.5, "y": 15.5, "dia": 3.4}, ...],
+    "bbox_mm": [42.3, 42.3, 4.0]
+  }
+}
+```
+
+returning per-feature found/not-found and positional error. That single endpoint
+turns "AI-generated CAD" from a demo into something you can put in a pipeline,
+and it is not something a user can build as well as you can — I am parsing your
+export format from the outside and guessing at tolerances.
+
+### 13.2 Provenance travelling with generated geometry
+
+A generated part currently arrives as bare KCL. Nothing in it records what was
+asked for, which model produced it, or when. So the moment it lands in someone's
+project it is indistinguishable from a part a person drew.
+
+That matters more than it sounds. My whole project turned on the finding that an
+AI-generated number and a verified one look identical once written down. The same
+is true of geometry: six months later nobody can tell which parts in an assembly
+were generated, from what prompt, or whether anyone checked them.
+
+A `// @generated` header block, or a sidecar manifest, carrying the prompt hash,
+the model, the timestamp and any verification result, would cost you nothing and
+would let a team answer "where did this part come from" without archaeology.
+
+### 13.3 A standard-parts catalogue where every figure carries its conditions
+
+I hand-curated two catalogues: NEMA frames and bearings. The interesting part is
+not the numbers, it is that the loader **rejects** a figure that arrives without
+the conditions it was measured under.
+
+That rule exists because I got it wrong four times. Two vendors publish "15" for
+the same quantity in different units. A radial rating is meaningless without the
+distance it was quoted at, and I compared a 20mm rating to a 15mm load for weeks
+without noticing.
+
+If Zoo hosted a standard-parts library — NEMA frames, bearings, extrusion
+profiles, fasteners — with that constraint enforced at the schema level, every
+generator built on your platform would inherit it. Without it, each of us curates
+our own copy and each of us gets a different subset wrong.
+
+The schema matters more than the data. `28` is not a radial rating. `28 N at
+20 mm from the flange, per JK42HSxx datasheet` is.
+
+### 13.4 A stated convention for where a part's origin goes
+
+I put mine at the centre of the plate, on the mounting face. That is a guess.
+Another generator will guess differently, and parts from two tools will not
+compose without someone reading both sources to find the numbers.
+
+One paragraph in your docs — "a part's origin should be at its primary mounting
+datum" or whatever you think right — would make generated parts interoperable by
+default. This is the cheapest item on this list and possibly the highest
+leverage.
+
+### 13.5 Already filed above
+
+Assembly mates (#11) and module-level `translate` moving only the last body
+(#12). Both are positioning problems, and positioning is where the handoff from
+generator to human currently breaks.
+
+---
+
+## 14. Where an LLM would genuinely help, and where it would not
+
+I have strong opinions here because I built the non-LLM version and can see
+exactly which parts were hard for the wrong reasons.
+
+### 14.1 The hard part for a novice is not CAD. It is knowing which questions matter.
+
+My tool asks for a shaft load in newtons. Consider what a hobbyist actually
+knows: they have a NEMA 17, a belt, and a thing they want to move. They do not
+know the belt tension. They do not know that a radial rating is quoted at a
+distance from the flange, so the number is meaningless without saying where the
+load acts. They do not know that the shaft is the weak point rather than the
+bracket — that was the single biggest correction in this whole project, and it
+came from a mechatronics engineer, not from the tool.
+
+A text box marked "Shaft load (N)" hands all of that difficulty to the person
+least equipped to carry it. And the answer they type becomes the input to a
+chain of otherwise-rigorous checks. **The weakest link in my tool is the number
+the user invents**, and no amount of provenance downstream fixes it.
+
+### 14.2 What an LLM is genuinely good at here
+
+**Turning a situation into a structured spec.** "It's a NEMA 17 driving a small
+belt on a gantry, and the operator reaches into that area" is something a
+beginner can say and an LLM can turn into `service=moving`,
+`workspace=shared`, plus the follow-up questions that actually change the
+answer. That is a classification task with an inspectable output — exactly the
+shape where a wrong answer is visible immediately.
+
+**Asking the one question that matters.** Most inputs do not change the verdict.
+An expert knows which one does; a form cannot. An LLM that has read the rule
+registry can look at a partial spec and ask "how far from the motor face does
+the pulley sit?" — because it can see that the radial rating is a moment limit
+and the offset is the term nobody supplies correctly.
+
+**Explaining the chain in plain language.** My output says `BEARING REQUIRED,
+200N at 15mm (3000N·mm) exceeds 75N at 20mm (1500N·mm), 2.0x over`. That is
+correct and it is opaque to the person who most needs it. The same facts as
+"your belt is pulling about twice as hard as this motor's bearings are rated
+for; a bearing carrying the shaft would fix it" is the same information and a
+different tool.
+
+**Noticing that no rule applies.** My registry declines to model board mounts and
+says so. An LLM sitting on top of a rule registry could say "nothing here covers
+your case, and here is what actually governs it" — which is far more useful than
+a confident number and far harder to get from a form.
+
+### 14.3 What an LLM should not do, and why I am confident about it
+
+It should not be the authority for a number, and it should not make the
+engineering decision.
+
+This project shipped four bugs past a green test suite **and** a passing
+verifier. Not one was a coding error; all four were wrong or absent numbers. A
+language model is a machine for producing plausible numbers. Putting one in the
+decision seat does not fix that failure — it industrialises it, generating
+confident specs faster than anyone can check them, while the verifier keeps
+passing because the spec is what is wrong.
+
+The architecture that works is already in your platform, one layer down: **the
+Agent API is a language model, and it works because it is constrained to
+coordinates I computed and verified against.** It does the drawing, not the
+deciding. Apply the same relationship one layer up and you get the interaction
+layer without the epistemics problem.
+
+My test for which layer something belongs in: *can it be wrong silently?* If
+yes, it is a rule with a source. If it is reading intent from a human, it is a
+model's job.
+
+### 14.4 The concrete suggestion
+
+Zookeeper already does natural language → geometry. What is missing is natural
+language → **spec** → verified geometry, with the spec visible in the middle
+where a human can correct it.
+
+That middle artifact is the whole thing. It is what makes the output auditable,
+regression-testable, and correctable once for everyone rather than re-derived
+per conversation. It is also what lets a non-expert participate: they can read
+"NEMA 17, belt load 40N acting 25mm from the face, on a moving gantry" and say
+"no, it's more like 60" — which they cannot do with a prompt that went straight
+to a solid.
+
+If you build that, the rule registry in this repo is the shape of the thing that
+sits under it, and it is MIT licensed. Take any of it.
+
+---
+
 *Findings from building [ZooMounter](https://github.com/ibin88/ZooMounter) for
 the Zoo API Makeathon, July-August 2026. Happy to expand on any of these.*

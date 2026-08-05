@@ -306,6 +306,33 @@ first and reports one of:
 When a bearing is needed it names one: *"F8-16M would carry this: rated 4990 N
 static against 240 N required"* — and gives you the command to generate it.
 
+> ### The load model is rudimentary. Read this before trusting a verdict.
+>
+> The comparison above is careful. **What it compares is not.**
+>
+> `--shaft-load-n` is a number you type. There is no torque, speed, duty cycle
+> or transmission geometry to derive it from — deriving it was cut deliberately
+> rather than done badly, because turning your honest guess into an
+> authoritative-looking number inherits the same failure this whole project is
+> about. So the verdict is a check on *the number you supplied*, not on your
+> machine.
+>
+> Three specific limits worth knowing:
+>
+> - **One load, one direction, one run.** Radial and axial cannot be combined.
+>   Run both and take the worse case.
+> - **The default offset is 15 mm and no mount overrides it**, while every
+>   radial rating on file is measured at 20 mm. Pass `--overhang-mm` with the
+>   real distance or the default is a placeholder standing in for a measurement.
+> - **`--safety-factor` does not reach the shaft verdict.** It applies to
+>   bearing selection only, so a load at 99% of a published maximum reads
+>   `SHAFT OK` however high you set it.
+>
+> This covers a narrow set of cases well and needs substantial work before it is
+> usable by everyone. It is declared in the rule registry as
+> `load_model_is_rudimentary` and printed in every inspection report, so the
+> caveat travels with the output rather than living only here.
+
 ### Two loads, not one
 
 - **`--shaft-load-n`** — acts at the shaft (belt, gear, leadscrew). This is what
