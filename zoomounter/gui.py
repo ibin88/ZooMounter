@@ -31,15 +31,25 @@ from pathlib import Path
 import customtkinter as ctk
 from PIL import Image
 
+from . import bearings as bearings_mod
 from . import generate, mechanics, verify
 from .config import load_environment
 from .cli import default_output_dir, write_report
 from .materials import MATERIALS, get_material
-from .bearings import BY_DESIGNATION, auto_bearing_mount
+from .bearings import (
+    BEARING_TOPOLOGIES,
+    BY_DESIGNATION,
+    apply_bearing_topology,
+    auto_bearing_mount,
+    select_bearing,
+)
 from .mount_specs import MOUNTS, get_mount
 
 ctk.set_appearance_mode("system")
 ctk.set_default_color_theme("blue")
+
+# Sentinel for the topology picker: no bearing in this mount at all.
+TOPOLOGY_NONE = "none"
 
 MOUNT_KEYS = [*MOUNTS.keys(), "bearing", "custom"]
 MATERIAL_KEYS = [*MATERIALS.keys(), "custom"]
@@ -104,13 +114,28 @@ class App(ctk.CTk):
         ).grid(row=2, column=0, columnspan=2, sticky="w")
         row += 1
 
-        self.integrate_bearing_var = ctk.BooleanVar(value=False)
-        self.integrate_bearing_cb = ctk.CTkCheckBox(
-            form, text="Integrate bearing if needed (adds seat counterbore)", 
-            variable=self.integrate_bearing_var,
-            command=lambda: self._on_bearing_visibility(self.mount_var.get())
+        # Replaces the old "Integrate bearing" checkbox. A checkbox implied
+        # there was one way to put a bearing in a mount. There are two, they
+        # produce different parts, and only one of them actually relieves the
+        # motor -- so the choice has to be visible rather than assumed.
+        self.topology_frame = ctk.CTkFrame(form, fg_color="transparent")
+        self.topology_frame.grid(row=row, column=0, columnspan=2, sticky="ew")
+        self.topology_frame.grid_columnconfigure(1, weight=1)
+        ctk.CTkLabel(self.topology_frame, text="Bearing in this mount").grid(
+            row=0, column=0, sticky="w"
         )
-        self.integrate_bearing_cb.grid(row=row, column=0, columnspan=2, sticky="w", pady=4)
+        self.topology_var = ctk.StringVar(value=TOPOLOGY_NONE)
+        ctk.CTkOptionMenu(
+            self.topology_frame,
+            values=[TOPOLOGY_NONE, *BEARING_TOPOLOGIES],
+            variable=self.topology_var,
+            command=self._on_topology_change,
+        ).grid(row=0, column=1, sticky="ew", pady=4)
+        self.topology_help = ctk.CTkLabel(
+            self.topology_frame, text="", font=ctk.CTkFont(size=11),
+            text_color="gray60", anchor="w", wraplength=380, justify="left",
+        )
+        self.topology_help.grid(row=1, column=0, columnspan=2, sticky="w")
         row += 1
 
         self.custom_mount_frame = ctk.CTkFrame(form, fg_color="transparent")
@@ -592,11 +617,41 @@ class App(ctk.CTk):
             c.create_text(x + dx, y + dy, text=text, fill=colour,
                           font=font, anchor=anchor)
 
+    _TOPOLOGY_HELP = {
+        TOPOLOGY_NONE: "Plain plate. The motor's own bearings take the shaft load.",
+        "stub-shaft": (
+            "Recommended. The bearing carries its own short shaft; the motor stands "
+            "off on spacers and drives it through a flexible coupling, so no side "
+            "load or thrust reaches the motor at all."
+        ),
+        "direct": (
+            "The bearing seats in the plate and runs on the motor's own shaft. "
+            "Smaller change, but overconstrained against the motor's front bearing, "
+            "and a plain stepper shaft has no shoulder so it carries almost no "
+            "thrust. The preview will say so."
+        ),
+    }
+
+    def _on_topology_change(self, value: str) -> None:
+        self.topology_help.configure(text=self._TOPOLOGY_HELP.get(value, ""))
+        self._on_bearing_visibility(self.mount_var.get())
+        self._draw_schematic()
+
     def _on_bearing_visibility(self, mount_key: str) -> None:
-        if mount_key == "bearing":
+        # The bearing picker is relevant either for a standalone block or when
+        # a topology is putting a bearing into a motor mount.
+        wants_bearing = (
+            mount_key == "bearing" or self.topology_var.get() != TOPOLOGY_NONE
+        )
+        if wants_bearing:
             self.bearing_frame.grid()
         else:
             self.bearing_frame.grid_remove()
+        # Topology applies to motor mounts only; a bearing block IS the bearing.
+        if mount_key == "bearing":
+            self.topology_frame.grid_remove()
+        else:
+            self.topology_frame.grid()
 
     def _on_material_change(self, value: str) -> None:
         if value == "custom":
@@ -684,14 +739,6 @@ class App(ctk.CTk):
             center_hole_dia_mm=float(self.center_hole_var.get() or 0),
         )
         
-        from .mount_specs import apply_host_mount
-        override = self.plate_width_override_var.get()
-        mount = apply_host_mount(
-            mount,
-            host_mount=self.host_mount_var.get(),
-            host_slot_direction=self.host_slot_dir_var.get(),
-            plate_width_override=float(override) if override else None
-        )
         material = get_material(
             self.material_var.get(),
             density_kg_m3=float(self.density_var.get()) if self.density_var.get() else None,
@@ -702,66 +749,71 @@ class App(ctk.CTk):
         load_n = float(self.load_var.get())
         safety_factor = float(self.safety_var.get())
         overhang = float(self.overhang_var.get()) if self.overhang_var.get() else None
-        
-        if self.integrate_bearing_var.get():
-            designation = self.bearing_var.get()
-            from .bearings import select_bearing, SHAFT_CLEARANCE_MM
-            selection = select_bearing(
-                self.load_type_var.get(), load_n, float(self.shaft_dia_var.get()),
-                safety_factor, None if designation == "auto" else designation
-            )
-            if selection.bearing:
-                import dataclasses
-                # Integrate the bearing seat into this mount
-                load_type = self.load_type_var.get()
-                if load_type == "axial":
-                    seat_depth = selection.bearing.width_mm
-                    centre_hole = selection.bearing.bore_mm + SHAFT_CLEARANCE_MM
-                else:
-                    seat_depth = 0.0
-                    centre_hole = 0.0
+        load_type = self.load_type_var.get()
 
-                mount = dataclasses.replace(
-                    mount,
-                    bearing_designation=selection.bearing.designation,
-                    bearing_seat_dia_mm=selection.bearing.od_mm,
-                    bearing_seat_depth_mm=seat_depth,
-                    bearing_width_mm=selection.bearing.width_mm,
-                    center_hole_dia_mm=max(mount.center_hole_dia_mm, centre_hole)
-                )
-                self._selected_bearing = selection.bearing
-            else:
-                self._selected_bearing = None
+        # Topology BEFORE host-side features, matching the CLI: putting a
+        # bearing in the plate changes the centre feature and the thickness,
+        # while widening the plate for T-slots changes neither.
+        topology = self.topology_var.get()
+        topology_checks = []
+        selection = None
+        self._selected_bearing = None
+        if topology != TOPOLOGY_NONE:
+            designation = self.bearing_var.get()
+            selection = select_bearing(
+                load_type, load_n, float(self.shaft_dia_var.get()),
+                safety_factor, None if designation == "auto" else designation,
+            )
+            if selection.bearing is None:
                 raise ValueError("No bearing fits this case.")
-        else:
-            self._selected_bearing = None
+            mount, topology_checks = apply_bearing_topology(
+                mount, selection.bearing, topology, load_type
+            )
+            self._selected_bearing = selection.bearing
+
+        from .mount_specs import apply_host_mount
+        base_mount = mount
+        # Stashed for the assembly writer. Re-deriving it from the catalogue
+        # there would throw away the topology -- the standoff and the bearing
+        # seat live on this spec, and without them the assembly draws a plain
+        # motor bolted flat to the plate whatever you selected.
+        self._base_mount = base_mount
+        override = self.plate_width_override_var.get()
+        mount = apply_host_mount(
+            mount,
+            host_mount=self.host_mount_var.get(),
+            host_slot_direction=self.host_slot_dir_var.get(),
+            plate_width_override=float(override) if override else None
+        )
 
         # The shaft question is answered against the base component, before
         # any host-side features widen the plate -- widening a bracket does
         # not change what the motor's bearings can take.
         decision = (
             mechanics.shaft_support(
-                mount=mount,
+                mount=base_mount,
                 shaft_load_n=load_n,
-                load_type=self.load_type_var.get(),
+                load_type=load_type,
                 offset_mm=overhang,
             )
-            if mount.kind == "motor"
+            if base_mount.kind == "motor"
             else None
         )
+        if decision is not None:
+            decision.checks.extend(topology_checks)
+
         thickness = mechanics.required_thickness(
             mount=mount,
             material=material,
             plate_load_n=float(self.plate_load_var.get() or 0),
         )
 
-        # Add selection notes if we integrated a bearing
-        if self.integrate_bearing_var.get() and getattr(self, "_selected_bearing", None):
-            from . import bearings as _b
+        if self._selected_bearing is not None:
             thickness.notes.extend(selection.notes)
             thickness.notes.append(
-                _b.check_seat_depth(self._selected_bearing, thickness.required_thickness_mm,
-                                    self.load_type_var.get())
+                bearings_mod.check_seat_depth(
+                    self._selected_bearing, thickness.required_thickness_mm, load_type
+                )
             )
 
         return mount, material, load_n, safety_factor, thickness, decision
@@ -804,6 +856,7 @@ class App(ctk.CTk):
                                 self.load_type_var.get())
         )
         self._selected_bearing = selection.bearing
+        self._base_mount = mount
         # No shaft decision: a bearing block carries the load by design, so
         # there is no motor shaft rating for it to be measured against.
         return mount, material, load_n, safety_factor, thickness, None
@@ -1052,13 +1105,12 @@ class App(ctk.CTk):
         failed assembly costs the context view, never the part."""
         from . import assembly as asm
 
-        try:
-            base = get_mount(self.mount_var.get()) if self.mount_var.get() in MOUNTS else mount
-        except Exception:
-            base = mount
+        base = getattr(self, "_base_mount", None) or mount
+        # The bearing is drawn whenever one was chosen -- for a standalone
+        # block AND for a topology that puts one into a motor mount. Gating
+        # this on `mount == "bearing"` meant an integrated bearing was sized,
+        # warned about, and then left out of the picture entirely.
         bearing = getattr(self, "_selected_bearing", None)
-        if self.mount_var.get() != "bearing":
-            bearing = None
         face = self.mounting_face_var.get()
         t_mm = thickness.required_thickness_mm
 

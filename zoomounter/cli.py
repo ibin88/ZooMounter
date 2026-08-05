@@ -22,7 +22,7 @@ from rich.panel import Panel
 from rich.prompt import FloatPrompt, IntPrompt, Prompt
 from rich.table import Table
 
-from . import generate, kcl_inspect, mechanics, verify, zoo_project
+from . import bearings, generate, kcl_inspect, mechanics, verify, zoo_project
 from .config import load_environment
 from .materials import MATERIALS, get_material
 from .mount_specs import EXTRUSION_SERIES, MOUNTS, get_mount
@@ -138,6 +138,15 @@ def build_parser() -> argparse.ArgumentParser:
     bearing_group.add_argument(
         "--bearing", default=None,
         help="Force a specific bearing by designation (e.g. 608, 51101) instead of selecting one from the load case. A mismatch with the load type is warned about, not silently accepted.",
+    )
+    bearing_group.add_argument(
+        "--bearing-topology", choices=list(bearings.BEARING_TOPOLOGIES), default=None,
+        help="Put a bearing into a MOTOR mount, and say how it takes the load. "
+        "'stub-shaft' (recommended): the bearing carries its own short shaft and the motor "
+        "stands off on spacers driving it through a flexible coupling, so no side load or thrust "
+        "reaches the motor at all. 'direct': the bearing seats in the plate and runs on the "
+        "motor's own shaft -- smaller change, but overconstrained against the motor's front "
+        "bearing and near-useless for thrust, and the tool says so. Omit for a plain plate.",
     )
 
     custom_mount = p.add_argument_group("--mount custom options")
@@ -388,8 +397,6 @@ def _bearing_that_would_carry_it(mount, args) -> mechanics.Check:
     advice; "add an F8-16M, which carries 4990N static against the 240N you
     need" is an answer, and the difference is most of the tool's value.
     """
-    from . import bearings
-
     if not mount.shaft_dia_mm:
         return mechanics.Check(
             level="INFO",
@@ -780,8 +787,8 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         bearing_selection = None
+        topology_checks = []
         if args.mount == "bearing":
-            from . import bearings
             shaft = args.shaft_dia_mm
             if shaft is None:
                 console.print(
@@ -812,7 +819,35 @@ def main(argv: list[str] | None = None) -> int:
                 bolt_hole_dia_mm=args.bolt_hole_dia_mm,
                 center_hole_dia_mm=args.center_hole_dia_mm or 0,
             )
-        
+
+        if args.bearing_topology:
+            if mount.kind != "motor":
+                console.print(
+                    "[red]error:[/red] --bearing-topology puts a bearing into a "
+                    "MOTOR mount. For a standalone bearing block use "
+                    "--mount bearing."
+                )
+                return 2
+            bearing_selection = bearings.select_bearing(
+                load_type=args.load_type,
+                load_n=args.shaft_load_n,
+                shaft_dia_mm=(
+                    args.shaft_dia_mm
+                    if args.bearing_topology == bearings.TOPOLOGY_STUB_SHAFT
+                    else mount.shaft_dia_mm
+                ) or mount.shaft_dia_mm,
+                safety_factor=args.safety_factor,
+                designation=args.bearing,
+            )
+            if bearing_selection.bearing is None:
+                console.print("[red]No bearing fits this case.[/red]")
+                for n in bearing_selection.notes:
+                    console.print(f"  [{n.level}] {n.message}")
+                return 1
+            mount, topology_checks = bearings.apply_bearing_topology(
+                mount, bearing_selection.bearing, args.bearing_topology, args.load_type
+            )
+
         from .mount_specs import apply_host_mount
         base_mount = mount
         mount = apply_host_mount(
@@ -843,8 +878,11 @@ def main(argv: list[str] | None = None) -> int:
             load_type=args.load_type,
             offset_mm=args.overhang_mm,
         )
-        if decision.needs_bearing:
+        if decision.needs_bearing and not topology_checks:
             decision.checks.append(_bearing_that_would_carry_it(base_mount, args))
+        # A chosen topology IS the answer to the shaft question, so its notes
+        # belong with the verdict rather than in the thickness breakdown.
+        decision.checks.extend(topology_checks)
 
     thickness = mechanics.required_thickness(
         mount=mount,
@@ -852,7 +890,7 @@ def main(argv: list[str] | None = None) -> int:
         plate_load_n=args.plate_load_n,
     )
     if bearing_selection is not None and bearing_selection.bearing is not None:
-        from . import bearings as _b
+        _b = bearings
         # Appended to thickness.notes so they travel through the existing
         # console summary and the markdown report with no extra plumbing.
         thickness.notes.extend(bearing_selection.notes)

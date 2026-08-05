@@ -125,12 +125,28 @@ class MountSpec:
     # shaft, so confusing the two would pick a bearing four sizes too big.
     shaft_dia_mm: float = 0  # 0 = unknown, which blocks bearing selection
 
-    # Bearing seat, filled in by bearings.apply_bearing(). Kept as plain
-    # scalars so mount_specs stays a leaf module with no imports of its own.
+    # Bearing seat, filled in by bearings.apply_bearing_topology(). Kept as
+    # plain scalars so mount_specs stays a leaf module with no imports.
     bearing_designation: str = ""
     bearing_seat_dia_mm: float = 0  # bearing OD; the plate is bored to this
     bearing_seat_depth_mm: float = 0  # 0 = through-bore, >0 = blind counterbore
     bearing_width_mm: float = 0  # how much plate the bearing needs to sit in
+
+    # How the bearing relates to the motor. The two are different parts, not a
+    # display option -- see bearings.apply_bearing_topology().
+    bearing_topology: str = ""  # "" | "direct" | "stub-shaft"
+    bearing_bore_mm: float = 0  # what actually turns in the bearing
+
+    # Gap between the motor's mounting face and this plate, for the flexible
+    # coupling. Non-zero only for the stub-shaft topology, where the motor
+    # stands off on spacers and its own shaft never enters the plate.
+    motor_standoff_mm: float = 0
+
+    # Depth of the recess that clears the motor's pilot boss. Only the direct
+    # topology needs one: it puts the boss on the motor side of the plate and
+    # the bearing seat on the far side, so the plate has to be thick enough for
+    # both. Stub-shaft does not, because the motor is not touching the plate.
+    boss_recess_depth_mm: float = 0
 
     def estimate_volume_mm3(self, thickness_mm: float) -> float:
         """Solid plate volume minus all holes -- used to sanity-check the

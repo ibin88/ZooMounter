@@ -57,6 +57,18 @@ SHAFT_STUB_MM = 20.0  # how much shaft to draw past the plate
 PILOT_BOSS_HEIGHT_MM = 2.0  # NEMA register boss standing proud of the flange
 BOARD_PCB_THICKNESS_MM = 1.6  # standard FR-4
 
+# Depth of the motor's tapped mounting holes. Indicative: what comes from the
+# catalogue is the hole POSITIONS and diameter, which is the whole point of
+# drawing them. The depth is only so they read as blind holes rather than
+# through-holes, and nothing is derived from it.
+MOTOR_TAP_DEPTH_MM = 5.0
+
+# Outside diameter of the flexible coupling drawn in the stub-shaft assembly.
+# The standard D18-D19 x L25 part; length comes from bearings.COUPLING_LENGTH_MM
+# so the two cannot drift apart.
+COUPLING_OD_MM = 18.0
+COLOUR_COUPLING = "#6b7280"
+
 HEADER = "@settings(defaultLengthUnit = mm, kclVersion = 2.0)\n"
 
 COLOUR_COMPONENT = "#3d4756"
@@ -119,28 +131,104 @@ def _ring(var: str, plane_z: float, od: float, bore: float, length: float, colou
     )
 
 
-def _box(var: str, plane_z: float, width: float, depth: float, length: float, colour: str) -> str:
+def _box(
+    var: str,
+    plane_z: float,
+    width: float,
+    depth: float,
+    length: float,
+    colour: str,
+    holes: tuple[tuple[float, float], ...] = (),
+    hole_dia: float = 0.0,
+    hole_depth: float = 0.0,
+) -> str:
+    """A rectangular prism, optionally with blind holes in the face it stands on.
+
+    The holes matter more than they look. Without them the motor is a blank
+    slab, and the one question an assembly can answer at a glance -- do the
+    plate's bolt holes actually line up with the motor's? -- is invisible. That
+    is precisely the mismatch this project shipped once and did not catch: a
+    6.4mm positional error on every hole, passing every check. Drawing both
+    patterns puts it on screen.
+    """
     hw, hd = width / 2, depth / 2
-    return (
-        f"{var}Plane = offsetPlane(XY, offset = {plane_z:g})\n"
-        f"{var}Sketch = sketch(on = {var}Plane) {{\n"
-        f"  e1 = line(start = [{-hw:g}mm, {-hd:g}mm], end = [{hw:g}mm, {-hd:g}mm])\n"
-        f"  e2 = line(start = [{hw:g}mm, {-hd:g}mm], end = [{hw:g}mm, {hd:g}mm])\n"
-        f"  e3 = line(start = [{hw:g}mm, {hd:g}mm], end = [{-hw:g}mm, {hd:g}mm])\n"
-        f"  e4 = line(start = [{-hw:g}mm, {hd:g}mm], end = [{-hw:g}mm, {-hd:g}mm])\n"
-        f"}}\n"
-        f"{var}Region = region(\n"
-        f"  segments = [{var}Sketch.e1, {var}Sketch.e2, {var}Sketch.e3, {var}Sketch.e4],\n"
-        f")\n"
-        f"extrude({var}Region, length = {length:g})\n"
-        f'  |> appearance(color = "{colour}")\n'
-        f"hidden{var} = hide({var}Sketch)\n"
-    )
+    lines = [
+        f"{var}Plane = offsetPlane(XY, offset = {plane_z:g})",
+        f"{var}Sketch = sketch(on = {var}Plane) {{",
+        f"  e1 = line(start = [{-hw:g}mm, {-hd:g}mm], end = [{hw:g}mm, {-hd:g}mm])",
+        f"  e2 = line(start = [{hw:g}mm, {-hd:g}mm], end = [{hw:g}mm, {hd:g}mm])",
+        f"  e3 = line(start = [{hw:g}mm, {hd:g}mm], end = [{-hw:g}mm, {hd:g}mm])",
+        f"  e4 = line(start = [{-hw:g}mm, {hd:g}mm], end = [{-hw:g}mm, {-hd:g}mm])",
+        "}",
+        f"{var}Region = region(",
+        f"  segments = [{var}Sketch.e1, {var}Sketch.e2, {var}Sketch.e3, {var}Sketch.e4],",
+        ")",
+    ]
+
+    if not holes or hole_dia <= 0:
+        lines.append(f"{var}Body = extrude({var}Region, length = {length:g})")
+        lines.append(f'  |> appearance(color = "{colour}")')
+        lines.append(f"hidden{var} = hide({var}Sketch)")
+        return "\n".join(lines) + "\n"
+
+    lines.append(f"{var}Solid = extrude({var}Region, length = {length:g})")
+    # Blind holes run into the mounting face, i.e. the same direction the body
+    # was extruded, but only as deep as the tapping.
+    depth_signed = hole_depth if length >= 0 else -hole_depth
+    tools = []
+    for i, (hx, hy) in enumerate(holes):
+        h = f"{var}Hole{i}"
+        tools.append(f"{h}Solid")
+        lines += [
+            f"{h}Sketch = sketch(on = {var}Plane) {{",
+            f"  profile = circle(start = [{hx + hole_dia / 2:g}mm, {hy:g}mm], "
+            f"center = [{hx:g}mm, {hy:g}mm])",
+            f"  diameter(profile) == {hole_dia:g}mm",
+            "}",
+            f"{h}Region = region(segments = [{h}Sketch.profile])",
+            f"{h}Solid = extrude({h}Region, length = {depth_signed:g})",
+        ]
+    lines.append(f"{var}Body = subtract({var}Solid, tools = [{', '.join(tools)}])")
+    lines.append(f'  |> appearance(color = "{colour}")')
+    lines.append(f"hidden{var} = hide({var}Sketch)")
+    lines += [f"hidden{var}Hole{i} = hide({var}Hole{i}Sketch)" for i in range(len(holes))]
+    return "\n".join(lines) + "\n"
 
 
 def _sign(face: str) -> float:
     """+1 puts the body above the plate, -1 below."""
     return 1.0 if face == FACE_FRONT else -1.0
+
+
+def _coupling_and_stub(mount, thickness_mm: float, s: float, explode_mm: float) -> list[str]:
+    """The flexible coupling and the stub shaft it drives.
+
+    This is what makes the stub-shaft topology legible: you can see that the
+    motor's shaft stops in the coupling and never enters the plate, so nothing
+    the bearing carries can reach the motor's own bearings. A picture of that
+    is worth more than the paragraph explaining it.
+    """
+    from .bearings import COUPLING_LENGTH_MM
+
+    half_t = thickness_mm / 2
+    gap_bottom = s * (half_t + explode_mm)
+    standoff = mount.motor_standoff_mm
+    # Centre the coupling in the standoff gap, leaving air at both ends.
+    slack = max(standoff - COUPLING_LENGTH_MM, 0.0) / 2
+    coupling_base = gap_bottom + s * slack
+
+    return [
+        _disc("coupling", coupling_base, COUPLING_OD_MM, s * COUPLING_LENGTH_MM,
+              COLOUR_COUPLING),
+        # Stub shaft: up into the coupling, down through the plate and out.
+        _disc(
+            "stubShaft",
+            coupling_base + s * (COUPLING_LENGTH_MM * 0.6),
+            mount.bearing_bore_mm,
+            -s * (COUPLING_LENGTH_MM * 0.6 + slack + explode_mm + thickness_mm + SHAFT_STUB_MM),
+            COLOUR_SHAFT,
+        ),
+    ]
 
 
 def component_kcl(mount, thickness_mm: float, face: str, explode_mm: float = 0.0) -> str | None:
@@ -158,7 +246,7 @@ def component_kcl(mount, thickness_mm: float, face: str, explode_mm: float = 0.0
     a custom mount has no component, and inventing one would put geometry on
     screen that answers to no data.
     """
-    half_t = thickness_mm / 2 + explode_mm
+    half_t = thickness_mm / 2
     s = _sign(face)
     body_len = mount.body_cg_offset_mm * 2
 
@@ -169,23 +257,45 @@ def component_kcl(mount, thickness_mm: float, face: str, explode_mm: float = 0.0
             "// the designed part and is not verified against anything.",
             HEADER,
         ]
-        # Body sits against the mounting face and extends away from the plate.
-        body_base = s * half_t
+        # In the stub-shaft topology the motor genuinely does stand off the
+        # plate, on spacers, with the coupling in the gap. That is real
+        # geometry, not the explode offset -- so it is added before it and
+        # survives into the to-scale assembly.
+        standoff = mount.motor_standoff_mm
+        body_base = s * (half_t + standoff + explode_mm)
+
         parts.append(
             _box("motorBody", body_base, mount.plate_width_mm,
-                 mount.plate_height_mm, s * body_len, COLOUR_COMPONENT)
+                 mount.plate_height_mm, s * body_len, COLOUR_COMPONENT,
+                 holes=mount.hole_positions,
+                 hole_dia=mount.bolt_hole_dia_mm,
+                 hole_depth=MOTOR_TAP_DEPTH_MM)
         )
-        if mount.center_hole_dia_mm > 0:
+        if mount.center_hole_dia_mm > 0 and standoff == 0:
+            # The pilot boss only registers in something it is touching.
             parts.append(
                 _disc("pilotBoss", body_base, mount.center_hole_dia_mm,
                       -s * PILOT_BOSS_HEIGHT_MM, COLOUR_COMPONENT)
             )
         if mount.shaft_dia_mm > 0:
-            # Shaft runs the other way, through the plate and out the far side.
-            parts.append(
-                _disc("shaft", body_base, mount.shaft_dia_mm,
-                      -s * (thickness_mm + SHAFT_STUB_MM), COLOUR_SHAFT)
-            )
+            if standoff > 0:
+                # Motor shaft reaches down into the coupling, and stops there.
+                parts.append(
+                    _disc("shaft", body_base, mount.shaft_dia_mm,
+                          -s * (explode_mm + standoff * 0.8), COLOUR_SHAFT)
+                )
+            else:
+                # Straight through the plate and out the far side. The explode
+                # offset is added to the LENGTH as well as the start, or the
+                # shaft stops in mid-air short of the hole it passes through --
+                # which is what the exploded preview used to show.
+                parts.append(
+                    _disc("shaft", body_base, mount.shaft_dia_mm,
+                          -s * (thickness_mm + SHAFT_STUB_MM + explode_mm),
+                          COLOUR_SHAFT)
+                )
+        if standoff > 0 and mount.bearing_bore_mm > 0:
+            parts += _coupling_and_stub(mount, thickness_mm, s, explode_mm)
         return "\n".join(parts)
 
     if mount.kind == "bearing":

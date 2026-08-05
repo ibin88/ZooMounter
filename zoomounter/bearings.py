@@ -508,6 +508,216 @@ def bearing_block(bearing: Bearing, load_type: str):
     )
 
 
+# ---------------------------------------------------------------------------
+# Bearing topology: HOW the bearing takes the load off the motor.
+# ---------------------------------------------------------------------------
+#
+# "Add a bearing" is not one design. There are two, they produce different
+# parts, and only one of them actually does what it claims.
+#
+# STUB-SHAFT (default). The bearing carries its own short shaft. The motor
+# stands off the plate on spacers and drives that stub shaft through a flexible
+# coupling, so it supplies torque and nothing else -- no side load, no thrust
+# reaches the motor's own bearings. This is the topology the load path actually
+# requires, and it is what mechanics.py's remedy text has always described.
+#
+# DIRECT. The bearing seats in the plate and runs on the motor's own shaft.
+# Smaller change, and it is what most hobby builds do. It has three problems,
+# and the tool states all three rather than quietly building it:
+#
+#   1. Overconstrained. Two bearings on one shaft -- the motor's front bearing
+#      and this one -- with no compliance between them. Any concentricity error
+#      loads the very bearing you were trying to protect.
+#   2. No shoulder. A plain stepper shaft has nothing for a thrust bearing to
+#      push against, so for axial load the thrust never enters the bearing at
+#      all. It helps radial somewhat and does close to nothing for thrust.
+#   3. Often no material to grip. On a NEMA 17 the pilot boss is 22mm and the
+#      bearing a 5mm shaft needs is 16mm across. Put the seat concentric with
+#      the boss recess and there is nothing left holding the outer ring, so the
+#      plate has to carry the boss recess on one face and the seat on the
+#      other -- which sets a thickness floor most printed brackets miss.
+#
+# Offering it without saying that would ship the thing this project exists to
+# catch: a part that looks like a bearing mount without being one.
+
+TOPOLOGY_STUB_SHAFT = "stub-shaft"
+TOPOLOGY_DIRECT = "direct"
+BEARING_TOPOLOGIES = (TOPOLOGY_STUB_SHAFT, TOPOLOGY_DIRECT)
+
+# A standard aluminium flexible coupling for small stepper shafts is 25mm long
+# (the ubiquitous "D18 L25" / "D19 L25" 5x8mm part). The motor has to stand off
+# by at least that much for the coupling to fit between its face and the plate.
+COUPLING_LENGTH_MM = 25.0
+COUPLING_SOURCE = (
+    "Standard aluminium flexible shaft coupling, D18-D19 x L25 (5mm-to-8mm "
+    "bore), as sold by Adafruit (1176), vxb and BIQU among others: 25mm long, "
+    "18-19mm outside diameter."
+)
+# Air either end so the coupling is clamping shafts rather than being pinched
+# between the motor face and the plate. Ours, not a datasheet figure.
+COUPLING_CLEARANCE_MM = 5.0
+
+# Material left under a blind counterbore, matching mechanics.BEARING_SEAT_FLOOR_MM.
+_SEAT_FLOOR_MM = 2.0
+
+TOPOLOGY_DIRECT_RULE = "topology_direct_overconstrained"
+TOPOLOGY_STUB_SHAFT_RULE = "topology_stub_shaft"
+
+
+def motor_standoff_for_coupling() -> float:
+    """How far the motor face sits off the plate in the stub-shaft topology."""
+    return COUPLING_LENGTH_MM + COUPLING_CLEARANCE_MM
+
+
+def apply_bearing_topology(base, bearing: Bearing, topology: str, load_type: str):
+    """Put a bearing into a motor mount, one of the two ways that exist.
+
+    Returns (MountSpec, [Check]). The spec is the plate to generate; the checks
+    say what the chosen topology costs, and for `direct` there are several.
+    """
+    import dataclasses
+
+    from .mechanics import Check
+
+    if topology not in BEARING_TOPOLOGIES:
+        raise ValueError(
+            f"bearing topology must be one of {BEARING_TOPOLOGIES}, got {topology!r}"
+        )
+
+    checks: list[Check] = []
+    axial = load_type == "axial"
+
+    if topology == TOPOLOGY_STUB_SHAFT:
+        standoff = motor_standoff_for_coupling()
+        spec = dataclasses.replace(
+            base,
+            name=f"{base.name} with {bearing.designation} on a stub shaft",
+            # The motor is not touching this plate, so there is no pilot boss
+            # to clear. The centre feature is the bearing seat and the hole the
+            # stub shaft turns in -- nothing else.
+            center_hole_dia_mm=bearing.bore_mm + SHAFT_CLEARANCE_MM,
+            bearing_designation=bearing.designation,
+            bearing_seat_dia_mm=bearing.od_mm,
+            bearing_seat_depth_mm=bearing.width_mm if axial else 0.0,
+            bearing_width_mm=bearing.width_mm,
+            bearing_topology=TOPOLOGY_STUB_SHAFT,
+            bearing_bore_mm=bearing.bore_mm,
+            motor_standoff_mm=standoff,
+            boss_recess_depth_mm=0.0,
+        )
+        checks.append(Check(
+            level="INFO",
+            message=(
+                f"Stub-shaft topology: the {bearing.designation} carries a "
+                f"{bearing.bore_mm:g}mm stub shaft, and the motor stands off "
+                f"{standoff:g}mm on spacers driving it through a flexible "
+                f"coupling. The motor supplies torque only -- no side load or "
+                f"thrust reaches its own bearings."
+            ),
+            source=COUPLING_SOURCE,
+            remedy=(
+                f"Use {standoff:g}mm standoffs on the motor's bolt pattern and a "
+                f"flexible coupling rated for {base.shaft_dia_mm:g}mm to "
+                f"{bearing.bore_mm:g}mm. The coupling must tolerate float -- a "
+                f"rigid one reintroduces the overconstraint this avoids."
+            ),
+            code=TOPOLOGY_STUB_SHAFT_RULE,
+        ))
+        return spec, checks
+
+    # --- direct on the motor's own shaft -----------------------------------
+    boss_recess = 0.0
+    if base.center_hole_dia_mm > 0:
+        boss_recess = 2.0  # NEMA register boss stands ~2mm proud of the flange
+
+    spec = dataclasses.replace(
+        base,
+        name=f"{base.name} with {bearing.designation} on the motor shaft",
+        center_hole_dia_mm=max(base.shaft_dia_mm + SHAFT_CLEARANCE_MM, 0.0),
+        bearing_designation=bearing.designation,
+        bearing_seat_dia_mm=bearing.od_mm,
+        bearing_seat_depth_mm=bearing.width_mm,
+        bearing_width_mm=bearing.width_mm,
+        bearing_topology=TOPOLOGY_DIRECT,
+        bearing_bore_mm=bearing.bore_mm,
+        motor_standoff_mm=0.0,
+        boss_recess_depth_mm=boss_recess,
+    )
+
+    checks.append(Check(
+        level="LOUD WARN",
+        message=(
+            f"Direct topology: the {bearing.designation} runs on the motor's own "
+            f"{base.shaft_dia_mm:g}mm shaft, which puts two bearings on one shaft "
+            f"with no compliance between them. Any concentricity error between "
+            f"this seat and the motor's front bearing loads the bearing you are "
+            f"trying to protect."
+        ),
+        remedy=(
+            "Use --bearing-topology stub-shaft instead, which decouples the two "
+            "through a flexible coupling. If you keep this, hold the seat "
+            "concentric to the bolt pattern and expect the relief to be partial."
+        ),
+        code=TOPOLOGY_DIRECT_RULE,
+    ))
+
+    if axial:
+        checks.append(Check(
+            level="LOUD WARN",
+            message=(
+                f"A plain stepper shaft has no shoulder or collar for a thrust "
+                f"bearing to push against, so this arrangement transmits almost "
+                f"no axial load into the {bearing.designation}. The thrust stays "
+                f"in the motor."
+            ),
+            remedy=(
+                "For thrust, use --bearing-topology stub-shaft: the stub shaft "
+                "can carry a shoulder or a locking collar, which is what makes "
+                "the load path work at all."
+            ),
+            code=TOPOLOGY_DIRECT_RULE,
+        ))
+
+    if bearing.bore_mm != base.shaft_dia_mm:
+        checks.append(Check(
+            level="LOUD WARN",
+            message=(
+                f"{bearing.designation} has a {bearing.bore_mm:g}mm bore but the "
+                f"motor shaft is {base.shaft_dia_mm:g}mm. Running directly on the "
+                f"motor shaft requires them to match."
+            ),
+            remedy=(
+                f"Pick a bearing with a {base.shaft_dia_mm:g}mm bore, or use "
+                f"--bearing-topology stub-shaft, where the stub shaft can be "
+                f"turned to whatever the bearing needs."
+            ),
+            code=TOPOLOGY_DIRECT_RULE,
+        ))
+
+    if boss_recess > 0 and bearing.od_mm <= base.center_hole_dia_mm:
+        # This is the one people do not see coming.
+        checks.append(Check(
+            level="LOUD WARN",
+            message=(
+                f"The {bearing.designation} is {bearing.od_mm:g}mm across but the "
+                f"motor's pilot boss needs a {base.center_hole_dia_mm:g}mm recess. "
+                f"Concentric, the seat falls inside the recess and there is no "
+                f"material left gripping the outer ring, so the plate must carry "
+                f"the boss recess on the motor face and the bearing seat on the "
+                f"far face -- at least "
+                f"{boss_recess + bearing.width_mm + _SEAT_FLOOR_MM:.1f}mm of plate."
+            ),
+            remedy=(
+                "Thicken the plate to the figure above, or use "
+                "--bearing-topology stub-shaft, where the motor does not touch "
+                "this plate and there is no boss to clear."
+            ),
+            code=TOPOLOGY_DIRECT_RULE,
+        ))
+
+    return spec, checks
+
+
 def seat_fit_note(bearing: Bearing):
     """The seat is bored to the nominal OD with no fit allowance applied.
 

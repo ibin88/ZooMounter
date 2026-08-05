@@ -338,6 +338,24 @@ def required_thickness(
         else:
             seat_min = mount.bearing_width_mm
             label = f"bearing seat ({mount.bearing_designation} outer-ring width)"
+
+        # The direct topology stacks two features through the plate: the motor's
+        # pilot boss needs a recess on the motor face, and the bearing seat opens
+        # from the far face. Concentric and overlapping, they would leave nothing
+        # gripping the outer ring, so the plate has to be deep enough for both
+        # plus a floor between them.
+        if mount.boss_recess_depth_mm > 0:
+            stacked = (
+                mount.boss_recess_depth_mm
+                + mount.bearing_width_mm
+                + BEARING_SEAT_FLOOR_MM
+            )
+            if stacked > seat_min:
+                seat_min = stacked
+                label = (
+                    f"boss recess + {mount.bearing_designation} seat + floor "
+                    f"(direct topology, features on opposite faces)"
+                )
         candidates[label] = seat_min
 
     governing_limit = max(candidates, key=lambda k: candidates[k])

@@ -225,6 +225,28 @@ status     = "derived"
 remedy     = "Adjust the bore for your process and expected shrinkage, or retain the bearing mechanically. ZooMounter does not model fit tolerance."
 
 # ---------------------------------------------------------------------------
+# Bearing topology: how the bearing takes the load off the motor.
+# ---------------------------------------------------------------------------
+
+[[rule]]
+id         = "topology_stub_shaft"
+statement  = "A bearing relieves a motor only when the drive between them tolerates float, which in practice means the bearing carries its own stub shaft and the motor drives it through a flexible coupling."
+applies_to = { kind = "motor" }
+source     = "Standard aluminium flexible shaft coupling, D18-D19 x L25 (5mm-to-8mm bore), sold by Adafruit (1176), vxb and BIQU among others: 25mm long, 18-19mm outside diameter. That length sets the standoff between the motor face and the plate."
+severity   = "info"
+status     = "vendor-datasheet"
+remedy     = "Use standoffs on the motor's bolt pattern and a flexible coupling. A rigid coupling reintroduces the overconstraint this topology exists to avoid."
+
+[[rule]]
+id         = "topology_direct_overconstrained"
+statement  = "A bearing seated in the plate and running on the motor's own shaft is overconstrained against the motor's front bearing, transmits almost no thrust because a plain stepper shaft has no shoulder, and often leaves no material gripping the outer ring once the pilot boss is cleared."
+applies_to = { kind = "motor" }
+source     = "Geometric and kinematic necessity. Two bearings on one shaft with no compliance between them is a classic overconstraint; a NEMA 17's 22mm pilot boss against the 16mm outside diameter of a bearing for its own 5mm shaft leaves nothing to grip concentrically."
+severity   = "loud-warn"
+status     = "derived"
+remedy     = "Use the stub-shaft topology instead. If you keep this one, hold the seat concentric to the bolt pattern, expect the relief to be partial, and do not rely on it for thrust at all."
+
+# ---------------------------------------------------------------------------
 # Declared limitations. No evaluator -- these are things the tool does NOT
 # check, recorded so their absence is visible rather than implied.
 # ---------------------------------------------------------------------------
