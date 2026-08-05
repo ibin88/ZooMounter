@@ -335,3 +335,63 @@ def test_face_checks_name_a_declared_rule():
 
     for c in mechanics.face_checks(N17, "back"):
         assert rules.get(c.code).statement
+
+
+# ---------------------------------------------------------------------------
+# Every surface must be able to make these choices AND receive the warnings.
+# The MCP server could do neither: it had no mounting_face and no
+# bearing_topology, so an assistant driving ZooMounter was structurally unable
+# to be told any of this.
+# ---------------------------------------------------------------------------
+
+
+def _mcp():
+    from zoomounter import mcp_server
+
+    return mcp_server
+
+
+def test_mcp_exposes_the_face_and_the_topology():
+    import inspect
+
+    for tool in ("size_mount", "generate_mount"):
+        params = inspect.signature(getattr(_mcp(), tool)).parameters
+        assert "mounting_face" in params, f"{tool} cannot choose a mounting face"
+        assert "bearing_topology" in params, f"{tool} cannot choose a topology"
+
+
+def test_mcp_returns_the_rear_face_warning():
+    result = _mcp().size_mount(
+        mount="nema23", material="aluminum_6061", shaft_load_n=20,
+        load_type="radial", mounting_face="back",
+    )
+    codes = [c.code for c in result["shaft"]["checks"]]
+    assert mechanics.REAR_FACE_MOUNTING in codes
+
+
+def test_mcp_returns_the_topology_warnings():
+    result = _mcp().size_mount(
+        mount="nema17", material="aluminum_6061", shaft_load_n=40,
+        load_type="axial", bearing_topology="direct",
+    )
+    loud = [c for c in result["shaft"]["checks"] if c.level == "LOUD WARN"]
+    assert any(c.code == TOPOLOGY_DIRECT_RULE for c in loud)
+
+
+def test_mcp_flags_the_unbuildable_combination():
+    """Rear-face mounting plus a stub shaft cannot be built -- the coupling
+    needs the motor's shaft pointing at the plate."""
+    result = _mcp().size_mount(
+        mount="nema23", material="aluminum_6061", shaft_load_n=200,
+        load_type="radial", mounting_face="back", bearing_topology="stub-shaft",
+    )
+    loud = [c for c in result["shaft"]["checks"] if c.level == "LOUD WARN"]
+    assert any("cannot be built" in c.message for c in loud)
+
+
+def test_mcp_rejects_a_nonsense_face():
+    with pytest.raises(ValueError, match="mounting_face"):
+        _mcp().size_mount(
+            mount="nema17", material="aluminum_6061", shaft_load_n=5,
+            mounting_face="sideways",
+        )

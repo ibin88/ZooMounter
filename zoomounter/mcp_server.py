@@ -137,6 +137,78 @@ def _shaft_payload(decision) -> dict[str, Any]:
     return payload
 
 
+
+def _apply_face_and_topology(m, shaft_load_n, load_type, overhang_mm,
+                             mounting_face, bearing_topology, safety_factor,
+                             bearing=None):
+    """Resolve the two design choices the CLI and GUI expose, and answer the
+    shaft question against the result.
+
+    These were missing from the MCP surface entirely, so an assistant driving
+    ZooMounter could not choose either -- and, worse, never saw the warnings
+    that come with them. A tool whose whole claim is that its warnings reach
+    the user cannot have a caller who is structurally unable to receive them.
+
+    Returns (mount, decision, bearing_selection_or_None).
+    """
+    from . import bearings as _b
+
+    if mounting_face not in ("front", "back"):
+        raise ValueError(f"mounting_face must be 'front' or 'back', got {mounting_face!r}")
+
+    selection = None
+    if bearing_topology:
+        if m.kind != "motor":
+            raise ValueError(
+                "bearing_topology puts a bearing into a MOTOR mount; for a "
+                "standalone block use mount='bearing'."
+            )
+        if bearing_topology not in _b.BEARING_TOPOLOGIES:
+            raise ValueError(
+                f"bearing_topology must be one of {list(_b.BEARING_TOPOLOGIES)}"
+            )
+        shaft_dia = m.shaft_dia_mm
+        selection = _b.select_bearing(
+            load_type=load_type, load_n=shaft_load_n,
+            shaft_dia_mm=shaft_dia, safety_factor=safety_factor,
+            designation=bearing,
+        )
+        if selection.bearing is None:
+            raise ValueError(
+                "no bearing in the catalogue fits this case: "
+                + "; ".join(n.message for n in selection.notes)
+            )
+        m, topology_checks = _b.apply_bearing_topology(
+            m, selection.bearing, bearing_topology, load_type
+        )
+    else:
+        topology_checks = []
+
+    decision = None
+    if m.kind == "motor":
+        decision = mechanics.shaft_support(
+            mount=m, shaft_load_n=shaft_load_n, load_type=load_type,
+            offset_mm=overhang_mm,
+        )
+        decision.checks.extend(topology_checks)
+        decision.checks.extend(mechanics.face_checks(m, mounting_face))
+        if mounting_face == "back" and m.motor_standoff_mm:
+            decision.checks.append(mechanics.Check(
+                level="LOUD WARN",
+                message=(
+                    "A stub-shaft topology needs the motor's shaft pointing AT "
+                    "the plate so a coupling can join them. Rear-face mounting "
+                    "points it the other way, so this combination cannot be built."
+                ),
+                remedy=(
+                    "Use mounting_face='front' with the stub-shaft topology, or "
+                    "drop the topology and mount by the rear face."
+                ),
+                code=mechanics.REAR_FACE_MOUNTING,
+            ))
+    return m, decision, selection
+
+
 @mcp.tool()
 def size_mount(
     mount: str,
@@ -144,6 +216,8 @@ def size_mount(
     shaft_load_n: float,
     load_type: str = "radial",
     plate_load_n: float = 0.0,
+    mounting_face: str = "front",
+    bearing_topology: str | None = None,
     safety_factor: float = 2.0,
     overhang_mm: float | None = None,
     plate_width_mm: float | None = None,
@@ -171,6 +245,21 @@ def size_mount(
     For radial loads, pass `overhang_mm` if you know how far out the load acts.
     It matters: a radial rating is a moment limit quoted at a stated distance,
     so doubling the offset doubles the demand.
+
+    `mounting_face` is which face of the MOTOR bolts to the plate, and it is a
+    different build rather than a viewpoint. 'front' bolts the shaft-end
+    faceplate so the shaft passes through the plate; 'back' bolts the rear face
+    so the shaft points away and never enters it. Rear mounting carries a
+    warning worth passing on: NEMA puts the bolt pattern, pilot boss and shaft
+    all on the front face, and rear tapped holes are a per-model extra many
+    frames do not have.
+
+    `bearing_topology` puts a bearing into a motor mount. 'stub-shaft' is the
+    one that works -- the bearing carries its own shaft and the motor drives it
+    through a flexible coupling, so no load reaches the motor. 'direct' runs the
+    bearing on the motor's own shaft; it is built if asked and returns three
+    LOUD WARNs explaining why it is the worse choice. Read them out rather than
+    summarising them away.
     """
     m, mat = _resolve(
         mount,
@@ -185,15 +274,9 @@ def size_mount(
         yield_mpa=yield_mpa,
         process=process,
     )
-    decision = (
-        mechanics.shaft_support(
-            mount=m,
-            shaft_load_n=shaft_load_n,
-            load_type=load_type,
-            offset_mm=overhang_mm,
-        )
-        if m.kind == "motor"
-        else None
+    m, decision, _selection = _apply_face_and_topology(
+        m, shaft_load_n, load_type, overhang_mm, mounting_face,
+        bearing_topology, safety_factor,
     )
     t = mechanics.required_thickness(
         mount=m, material=mat, plate_load_n=plate_load_n
@@ -338,6 +421,8 @@ def generate_mount(
     shaft_load_n: float,
     load_type: str = "radial",
     plate_load_n: float = 0.0,
+    mounting_face: str = "front",
+    bearing_topology: str | None = None,
     safety_factor: float = 2.0,
     overhang_mm: float | None = None,
     output_base: str = "output",
@@ -377,15 +462,9 @@ def generate_mount(
         yield_mpa=yield_mpa,
         process=process,
     )
-    decision = (
-        mechanics.shaft_support(
-            mount=m,
-            shaft_load_n=shaft_load_n,
-            load_type=load_type,
-            offset_mm=overhang_mm,
-        )
-        if m.kind == "motor"
-        else None
+    m, decision, _selection = _apply_face_and_topology(
+        m, shaft_load_n, load_type, overhang_mm, mounting_face,
+        bearing_topology, safety_factor,
     )
     t = mechanics.required_thickness(
         mount=m, material=mat, plate_load_n=plate_load_n
