@@ -26,9 +26,18 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-mcp = ["mcp[cli]>=1.2"]
-all = ["mcp[cli]>=1.2"]
-dev = ["pytest>=8.0"]
+# PINNED BELOW 2.0 ON PURPOSE. mcp 2.0 removed mcp.server.fastmcp.FastMCP
+# and replaced it with MCPServer in mcp.server.mcpserver -- a breaking
+# change that >=1.2 happily accepts. A fresh install picked up 2.0 and the
+# MCP server died on import, while this repo's venv had 1.28.1 from months
+# ago and worked. Classic works-on-my-machine, caught by installing into a
+# clean environment rather than trusting the one that has been here all along.
+mcp = ["mcp[cli]>=1.2,<2"]
+all = ["mcp[cli]>=1.2,<2"]
+# The suite covers the MCP surface, so the dev extra has to pull it in --
+# otherwise the documented way to run the tests fails five of them on a
+# missing optional dependency, which reads as a broken project.
+dev = ["pytest>=8.0", "mcp[cli]>=1.2,<2"]
 
 [project.scripts]
 # This is what makes `zoomounter` a real command after `pip install`, instead

@@ -168,10 +168,14 @@ three minutes generating something with nowhere to go.
 ## Install
 
 ```bash
-pip install -e ".[all]"     # or just ".[mcp]" / ".[gui]" for less
+pip install -e .            # CLI + GUI
+pip install -e ".[mcp]"     # ...and the MCP server
+pip install -e ".[dev]"     # ...and pytest, to run the test suite
 ```
 
-That puts `zoomounter`, `zoomounter-gui` and `zoomounter-mcp` on your PATH.
+That puts `zoomounter` and `zoomounter-gui` on your PATH, plus
+`zoomounter-mcp` with the `mcp` extra. The GUI needs no extra — `customtkinter`
+and `pillow` are core dependencies.
 
 **Keep the `-e`.** Without it, pip copies the package into site-packages and
 that copy never changes again. You then get the confusing failure where

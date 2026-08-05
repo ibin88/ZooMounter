@@ -351,6 +351,12 @@ def test_face_checks_name_a_declared_rule():
 
 
 def _mcp():
+    """The MCP server, or skip.
+
+    `mcp` is an optional dependency. A red suite caused by a missing optional
+    package looks identical to a broken project, and this repo cares about that
+    distinction more than most -- so it skips and says why."""
+    pytest.importorskip("mcp.server.fastmcp", reason="MCP extra not installed")
     from zoomounter import mcp_server
 
     return mcp_server
