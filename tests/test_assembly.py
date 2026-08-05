@@ -18,7 +18,14 @@ from zoomounter.assembly import (
     write_assembly,
 )
 from zoomounter.bearings import BY_DESIGNATION, bearing_block
-from zoomounter.mount_specs import MOUNTS, apply_host_mount, get_mount
+from zoomounter.mount_specs import (
+    MOUNTS,
+    MountSpec,
+    apply_host_mount,
+    get_mount,
+    rectangular_bolt_pattern,
+    square_bolt_pattern,
+)
 
 THICK = 4.0
 
@@ -126,13 +133,35 @@ def test_a_motor_gets_a_body_a_boss_and_a_shaft():
 
 
 def test_a_flange_has_no_component_body():
-    """vesa_75 is a bracket, not a component. Inventing a body for it would
-    put geometry on screen that answers to no data."""
-    assert component_kcl(get_mount("vesa_75"), THICK, FACE_FRONT) is None
+    """A flange is a bracket, not a component. Inventing a body for it would
+    put geometry on screen that answers to no data.
+
+    Built here rather than taken from the catalogue: the catalogue ships no
+    flange row, because ZooMounter's scope is parts governed by a shaft load.
+    The branch still has to behave, so the test supplies its own spec."""
+    flange = MountSpec(
+        name="Bare flange",
+        kind="flange",
+        plate_width_mm=90,
+        plate_height_mm=90,
+        bolt_hole_dia_mm=4.3,
+        hole_positions=square_bolt_pattern(75),
+    )
+    assert component_kcl(flange, THICK, FACE_FRONT) is None
 
 
 def test_a_board_gets_a_pcb_not_a_motor():
-    kcl = component_kcl(get_mount("raspberry_pi"), THICK, FACE_FRONT)
+    """Same reasoning as the flange above -- no board ships, but a board must
+    not be drawn as a motor if one is ever supplied."""
+    board = MountSpec(
+        name="Generic board",
+        kind="board",
+        plate_width_mm=65,
+        plate_height_mm=56,
+        bolt_hole_dia_mm=2.7,
+        hole_positions=rectangular_bolt_pattern(58, 49),
+    )
+    kcl = component_kcl(board, THICK, FACE_FRONT)
     assert kcl is not None
     assert "board" in kcl and "motorBody" not in kcl and "shaft" not in kcl
 

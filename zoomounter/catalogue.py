@@ -194,4 +194,22 @@ def load_mounts() -> list[dict[str, Any]]:
                 f"{where}: publishes a load limit but has no load_limit_source. "
                 f"An uncited limit is not evidence."
             )
+
+        # A citation is necessary and not sufficient. A radial rating is a
+        # moment limit on the motor's front bearing, quoted at a stated
+        # distance from the flange, so the same numeral means different things
+        # at different offsets. Without the distance there is nothing to
+        # compare a load case against -- and comparing anyway is how this
+        # project's recurring defect works: 15N vs 15lb, a square spacing read
+        # as a bolt circle, and now a rating measured at 20mm checked against a
+        # load applied at 15mm. In each case the number survived and its
+        # conditions did not.
+        if row.get("max_radial_n") is not None and row.get("max_radial_at_mm") is None:
+            raise CatalogueError(
+                f"{where}: publishes max_radial_n but no max_radial_at_mm. A radial "
+                f"rating is quoted at a distance from the mounting flange and means "
+                f"nothing without it -- find the distance in the datasheet, or drop "
+                f"the rating rather than comparing loads to it."
+            )
+        _positive(row, ("max_radial_at_mm",), where)
     return rows

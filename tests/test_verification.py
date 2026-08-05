@@ -185,9 +185,20 @@ _MOUNT_SCREW = {
     "nema17": "M3",
     "nema23": "M5",
     "bearing_608": "M3",
-    "raspberry_pi": "M2.5",
-    "vesa_75": "M4",
 }
+
+
+def test_every_mount_is_covered_by_the_screw_map():
+    """The map above is the catalogue written down a second time, so it can
+    drift from the catalogue. It already did: it named raspberry_pi and
+    vesa_75 after both were removed. Fail here rather than let a new mount
+    quietly skip the clearance check below."""
+    from zoomounter.mount_specs import MOUNTS
+
+    assert set(_MOUNT_SCREW) == set(MOUNTS), (
+        "_MOUNT_SCREW and the mount catalogue disagree; a mount added to one "
+        "and not the other is a mount whose bolt holes nothing checks."
+    )
 
 
 @pytest.mark.parametrize("mount_key, screw", sorted(_MOUNT_SCREW.items()))

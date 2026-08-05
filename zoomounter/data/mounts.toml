@@ -7,6 +7,17 @@
 # and the plate will not bolt on. ZooMounter shipped exactly that bug. Keep
 # the type honest and the loader expands it correctly.
 
+# A radial rating is a MOMENT limit wearing a force's clothes. It is quoted
+# at a stated distance from the mounting flange, because what it protects is
+# the motor's front bearing, and a side load's severity there scales with how
+# far out it acts. A rating whose distance did not travel with it cannot be
+# compared to a load case at all -- 28N at 15mm and 28N at 20mm are different
+# demands on the same bearing. max_radial_at_mm is therefore mandatory
+# alongside max_radial_n; the loader rejects one without the other.
+#
+# Axial needs no such field. Thrust along the shaft axis produces the same
+# demand wherever it is applied from, so the figure stands alone.
+
 # M3 fasteners. 3.4mm is ISO 273 "normal" clearance -- a 3.0mm hole would
 # be an interference fit on an M3 screw, not a clearance hole.
 [[mount]]
@@ -22,7 +33,8 @@ typical_mass_kg      = 0.28
 body_cg_offset_mm    = 20
 max_axial_n          = 10
 max_radial_n         = 28
-load_limit_source    = "ATO NEMA 17 (42mm) datasheet: Axial Max. Load 10N, Radial Max. Load 28N"
+max_radial_at_mm     = 20
+load_limit_source    = "ATO NEMA 17 (42mm) datasheet: Axial Max. Load 10N, Radial Max. Load 28N. Measurement distance from JK42HSxx-series datasheet (Jkong Motor), which publishes the same 28N as 'Max. radial force 28N (20mm from the flange)'."
 
 [mount.bolt_pattern]
 type = "square"
@@ -38,6 +50,12 @@ spacing_mm = 31
 # We take the conservative 15 N. An earlier revision hardcoded 67 N for
 # every motor, which is the Same Sky figure with the unit assumed -- exactly
 # how the NEMA bolt-pattern bug happened.
+#
+# RESOLVED FURTHER: the 57HS-series NEMA 23 datasheet independently publishes
+# "Max. axial force 15N" and "Max. radial force 75N (20mm from the flange)",
+# matching ATO on both figures. Two unrelated manufacturers now agree on 15 N,
+# against one on 15 lb, so the conservative reading is no longer a tie-break
+# on a single source.
 [[mount]]
 key                  = "nema23"
 name                 = "NEMA 23 stepper motor mount"
@@ -51,7 +69,8 @@ typical_mass_kg      = 0.7
 body_cg_offset_mm    = 28
 max_axial_n          = 15
 max_radial_n         = 75
-load_limit_source    = "ATO NEMA 23 (56mm) datasheet: Axial Max. Load 15N, Radial Max. Load 75N (conservative; Same Sky NEMA23-AMT112S publishes 15 lb = 66.7N axial)"
+max_radial_at_mm     = 20
+load_limit_source    = "ATO NEMA 23 (56mm) datasheet: Axial Max. Load 15N, Radial Max. Load 75N, corroborated by the 57HS-series datasheet ('Max. axial force 15N', 'Max. radial force 75N (20mm from the flange)'), which also supplies the measurement distance. Contested: Same Sky NEMA23-AMT112S publishes 15 lb = 66.7N axial."
 
 [mount.bolt_pattern]
 type = "square"
@@ -74,27 +93,23 @@ type = "circular"
 count = 4
 circle_dia_mm = 34
 
-[[mount]]
-key                  = "raspberry_pi"
-name                 = "Raspberry Pi mounting plate (Model B+/2/3/4 hole pattern)"
-kind                 = "board"
-plate_width_mm       = 65
-plate_height_mm      = 56
-bolt_hole_dia_mm     = 2.7
-
-[mount.bolt_pattern]
-type = "rectangular"
-x_spacing_mm = 58
-y_spacing_mm = 49
-
-[[mount]]
-key                  = "vesa_75"
-name                 = "VESA 75 mount (screen/panel bracket)"
-kind                 = "flange"
-plate_width_mm       = 90
-plate_height_mm      = 90
-bolt_hole_dia_mm     = 4.3
-
-[mount.bolt_pattern]
-type = "square"
-spacing_mm = 75
+# REMOVED: raspberry_pi and vesa_75.
+#
+# ZooMounter's scope is parts governed by a SHAFT load -- motors, bearing
+# housings, idlers, tensioners. Neither removed row was such a part, and
+# carrying them made the tool answer questions it had no model for:
+#
+#   - A Pi carries no shaft load at all. What actually governs a board mount
+#     is standoff height, connector clearance and airflow, none of which this
+#     tool computes. HANDOFF listed electronics mounts as explicitly CUT while
+#     this row kept shipping, so the catalogue contradicted the decision.
+#   - A VESA bracket IS load-bearing, but as a cantilever carrying the screen's
+#     own mass -- there is no axis and nothing rotates, so "radial" is a
+#     category error for it. Worse, the row published neither typical_mass_kg
+#     nor shaft_load_offset_mm, so the loader's defaults sized a monitor
+#     bracket as though the screen weighed nothing and the load acted 15mm off
+#     the face. The single number that dominates the real case was absent and a
+#     fabricated shaft offset stood in for it.
+#
+# Both were generating confident output for load paths that did not exist.
+# Declining to model them is the honest result; see RULES.md on applies_to.

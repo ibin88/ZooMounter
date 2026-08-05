@@ -2,10 +2,14 @@
 
 Each entry describes a standard mounting interface as an explicit list of
 hole positions (offsets from plate center) rather than assuming a circular
-bolt pattern -- that's what lets the same model cover both classic circular
-bolt-circle mounts (motors, bearings) and rectangular hole patterns from
-real hardware standards (Raspberry Pi, VESA). `circular_bolt_pattern()` is
-a helper for building the circular case concisely.
+bolt pattern -- that's what lets the same model cover circular bolt-circle
+mounts, square NEMA faceplates, and rectangular patterns without any of the
+three being special-cased. `circular_bolt_pattern()` is a helper for
+building the circular case concisely.
+
+The shipped catalogue covers parts governed by a shaft load: motors, bearing
+housings, idlers, tensioners. Board and panel mounts were removed -- see the
+note in data/mounts.toml for why modelling them was worse than declining to.
 
 `--mount custom` lets a user supply their own circular bolt pattern for
 anything not in the table.
@@ -62,10 +66,15 @@ def square_bolt_pattern(spacing_mm: float) -> tuple[tuple[float, float], ...]:
 def rectangular_bolt_pattern(x_spacing_mm: float, y_spacing_mm: float) -> tuple[tuple[float, float], ...]:
     """Four holes at the corners of a rectangle, centred on the origin.
 
-    Distinct from square_bolt_pattern because boards are not square: a
-    Raspberry Pi is 58mm across and 49mm deep between hole centres, and
-    collapsing that to one number is the same class of mistake as treating a
-    square spacing as a bolt circle."""
+    Distinct from square_bolt_pattern because a rectangular pattern carries
+    two independent numbers -- 58mm across and 49mm deep, say -- and
+    collapsing that to one is the same class of mistake as treating a square
+    spacing as a bolt circle.
+
+    No catalogue row currently uses this; it serves `--mount custom` and any
+    rectangular pattern a user supplies. Kept because the distinction is the
+    point: a helper that cannot express a non-square pattern invites someone
+    to approximate one with a square, which is exactly the bug."""
     hx, hy = x_spacing_mm / 2, y_spacing_mm / 2
     return (
         (round(hx, 4), round(hy, 4)),

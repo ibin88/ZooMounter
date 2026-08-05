@@ -13,7 +13,13 @@ from zoomounter import generate
 from zoomounter.kcl_inspect import check_parametric, inspect_kcl
 from zoomounter.materials import get_material
 from zoomounter.mechanics import required_thickness
-from zoomounter.mount_specs import apply_host_mount, get_mount
+from zoomounter.mount_specs import (
+    MOUNTS,
+    MountSpec,
+    apply_host_mount,
+    get_mount,
+    rectangular_bolt_pattern,
+)
 
 ALUMINIUM = get_material("aluminum_6061")
 THICKNESS = 1.05
@@ -189,14 +195,26 @@ def test_square_bolt_pattern_becomes_one_parameter():
 
 
 def test_non_square_pattern_falls_back_to_coordinates():
-    """A Raspberry Pi's holes are 58 x 49mm -- not derivable from a single
-    spacing, so inventing one would be wrong. It must degrade to explicit
-    coordinates rather than fabricate a relationship."""
-    scheme = generate.build_parameter_scheme(get_mount("raspberry_pi"), THICKNESS)
-    assert scheme.relations == {}
-    prompt, _ = generate.build_parametric_prompt(
-        get_mount("raspberry_pi"), ALUMINIUM, THICKNESS
+    """Holes at 58 x 49mm are not derivable from a single spacing, so
+    inventing one would be wrong. The scheme must degrade to explicit
+    coordinates rather than fabricate a relationship.
+
+    The spec is built here rather than looked up: the catalogue's only
+    rectangular row was the Raspberry Pi, which is now out of scope. The
+    fallback still has to work for any rectangular pattern a user supplies,
+    so the test provides one instead of leaning on a row that happened to
+    exist."""
+    rect = MountSpec(
+        name="Rectangular test pattern",
+        kind="flange",
+        plate_width_mm=65,
+        plate_height_mm=56,
+        bolt_hole_dia_mm=2.7,
+        hole_positions=rectangular_bolt_pattern(58, 49),
     )
+    scheme = generate.build_parameter_scheme(rect, THICKNESS)
+    assert scheme.relations == {}
+    prompt, _ = generate.build_parametric_prompt(rect, ALUMINIUM, THICKNESS)
     assert "(-29mm, -24.5mm)" in prompt
 
 
@@ -221,7 +239,10 @@ def test_thickness_is_stated_the_same_way_as_the_literal_prompt():
 
 
 def test_no_float_noise_reaches_the_prompt():
-    for name in ("nema17", "nema23", "bearing_608", "raspberry_pi", "vesa_75"):
+    # Iterate the catalogue rather than a hand-listed set. The literal list
+    # this replaced named two mounts that have since been removed, which is
+    # the failure mode of writing the catalogue down twice.
+    for name in MOUNTS:
         for option in ("none", "2020-slots", "4040-slots"):
             spec = apply_host_mount(get_mount(name), option)
             prompt, _ = generate.build_parametric_prompt(spec, ALUMINIUM, 2.3456789)
@@ -229,7 +250,7 @@ def test_no_float_noise_reaches_the_prompt():
 
 
 def test_every_builtin_mount_produces_a_usable_prompt():
-    for name in ("nema17", "nema23", "bearing_608", "raspberry_pi", "vesa_75"):
+    for name in MOUNTS:
         for option in ("none", "2020-slots", "4040-slots", "corner-holes"):
             spec = apply_host_mount(get_mount(name), option)
             prompt, scheme = generate.build_parametric_prompt(spec, ALUMINIUM, 3.0)

@@ -7,10 +7,12 @@ not just how much material came back.
 Built for [Zoo's API Makeathon](https://zoo.dev) on the **Agent API** (to
 generate) and the **File Format API** (to measure).
 
-> **New to this?** A mounting plate is the flat bracket that bolts a motor (or
-> a Raspberry Pi, or a monitor arm) to a machine. Get its hole pattern wrong by
-> two millimetres and the screws don't line up — the part is scrap. That
-> specific failure is what this tool is built to catch.
+> **New to this?** A mounting plate is the flat bracket that bolts a motor to a
+> machine. Get its hole pattern wrong by two millimetres and the screws don't
+> line up — the part is scrap. That specific failure is what this tool is built
+> to catch. The second one it catches is subtler: a stepper's shaft can take
+> far less side load and thrust than people assume, and no amount of bracket
+> makes up for it.
 
 ---
 
@@ -35,8 +37,10 @@ ZooMounter closes both, for one narrow, real task.
    (see [Sizing](#sizing-what-the-numbers-mean)).
 3. **Those exact numbers go into the Agent API prompt** — every hole as an
    explicit `(x, y)` coordinate, never "add some mounting holes." This is also
-   why circular bolt circles (motors, bearings) and rectangular patterns
-   (Raspberry Pi, VESA) need no special-casing: they're all just coordinates.
+   why square NEMA faceplates, circular bolt circles and rectangular patterns
+   need no special-casing: they're all just coordinates by the time the prompt
+   is built. What they are *not* is interchangeable upstream of that, which is
+   why the catalogue makes each declare its type.
 4. **The KCL is executed into a real STEP file** via Zoo's CLI.
 5. **The result is checked against the spec** — three checks, below.
 
@@ -165,11 +169,9 @@ Every run writes to its own timestamped folder under `./output/`, containing
 
 | Key | Description | Hole pattern |
 |---|---|---|
-| `nema17` | NEMA 17 stepper motor | circular, 31mm bolt circle |
-| `nema23` | NEMA 23 stepper motor | circular, 47.14mm bolt circle |
-| `bearing_608` | 608 (skate) bearing | circular |
-| `raspberry_pi` | Raspberry Pi B+/2/3/4 | rectangular, 58 × 49mm |
-| `vesa_75` | VESA 75 display bracket | rectangular, 75 × 75mm |
+| `nema17` | NEMA 17 stepper motor | **square, 31mm spacing** |
+| `nema23` | NEMA 23 stepper motor | **square, 47.14mm spacing** |
+| `bearing_608` | 608 (skate) bearing | circular, 34mm bolt circle |
 | `custom` | your own circular pattern via `--plate-width-mm`, `--bolt-count`, `--bolt-circle-dia-mm`, `--bolt-hole-dia-mm`, `--center-hole-dia-mm` | circular |
 
 ### Materials
