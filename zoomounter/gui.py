@@ -39,6 +39,7 @@ from .materials import MATERIALS, get_material
 from .bearings import (
     BEARING_TOPOLOGIES,
     BY_DESIGNATION,
+    TOPOLOGY_DIRECT,
     apply_bearing_topology,
     auto_bearing_mount,
     select_bearing,
@@ -80,7 +81,13 @@ class App(ctk.CTk):
     # ---- form -----------------------------------------------------------
 
     def _build_form(self) -> None:
-        form = ctk.CTkFrame(self)
+        # Scrollable, because the form is taller than the window and gets
+        # taller as options appear: choosing a topology reveals the bearing
+        # picker, choosing a host mount reveals the slot controls and the
+        # schematic. In a plain frame those simply pushed the load fields and
+        # the Generate button off the bottom edge with no way to reach them.
+        form = ctk.CTkScrollableFrame(self)
+        self._form = form  # exposed so a test can assert the form is scrollable
         form.grid(row=0, column=0, padx=16, pady=16, sticky="nsew")
         form.grid_columnconfigure(1, weight=1)
         row = 0
@@ -302,6 +309,15 @@ class App(ctk.CTk):
         else:
             self.custom_mount_frame.grid_remove()
 
+        # Follow the chosen mount's real shaft. The field defaulted to 8mm for
+        # everything, so selecting a NEMA 17 -- a 5mm shaft -- and asking for a
+        # bearing quietly sized one for 8mm, picked a 608, and reported an 11mm
+        # plate. The number was wrong three steps before anyone could see it.
+        if value in MOUNTS:
+            shaft = MOUNTS[value].shaft_dia_mm
+            if shaft:
+                self.shaft_dia_var.set(f"{shaft:g}")
+
         # Showing or hiding the topology picker is _on_bearing_visibility's
         # job now -- it owns both that and the bearing picker, so the two
         # cannot disagree about whether a bearing is in play.
@@ -453,26 +469,43 @@ class App(ctk.CTk):
         except Exception:
             pass
 
-        # Motor body, standing on the plate. NEMA frames are square, and
-        # apply_host_mount only widens X, so the body footprint is the
-        # unwidened mount.
+        # Motor body. NEMA frames are square, and apply_host_mount only widens
+        # X, so the body footprint is the unwidened mount.
+        #
+        # Which SIDE it sits on comes from the mounting face. The schematic
+        # used to draw it on +Z unconditionally, so switching front/back
+        # redrew the canvas and changed nothing -- the control looked live and
+        # was inert. The mount geometry genuinely does not change with the
+        # face, but the picture of the assembly must, or it is describing a
+        # different build to the one that will be generated.
         body_len = base.body_cg_offset_mm * 2
         if body_len > 0:
             bw = base.plate_width_mm / 2
             bh = base.plate_height_mm / 2
-            top = T + body_len
+            front = self.mounting_face_var.get() == "front"
+            sgn = 1.0 if front else -1.0
+            # A stub-shaft topology stands the motor off for the coupling.
+            # That is real geometry, so it belongs in the picture too.
+            standoff = getattr(mount, "motor_standoff_mm", 0.0) or 0.0
+            base_z = (T + standoff) if front else (-standoff)
+            top = base_z + sgn * body_len
             shapes.append({
-                "pts": [(bw, -bh, T), (bw, bh, T), (bw, bh, top), (bw, -bh, top)],
+                "pts": [(bw, -bh, base_z), (bw, bh, base_z), (bw, bh, top), (bw, -bh, top)],
                 "fill": "#333333", "outline": "#777777", "width": 1,
             })
             shapes.append({
-                "pts": [(-bw, bh, T), (bw, bh, T), (bw, bh, top), (-bw, bh, top)],
+                "pts": [(-bw, bh, base_z), (bw, bh, base_z), (bw, bh, top), (-bw, bh, top)],
                 "fill": "#3b3b3b", "outline": "#777777", "width": 1,
             })
             shapes.append({
                 "pts": [(-bw, -bh, top), (bw, -bh, top), (bw, bh, top), (-bw, bh, top)],
                 "fill": "#444444", "outline": "#777777", "width": 1,
             })
+            labels.append((
+                (0, 0, top), "motor" + (f"  (+{standoff:.0f}mm standoff)" if standoff else ""),
+                "#aaaaaa", ("Arial", 8), (0, -8 if front else 8),
+                "s" if front else "n",
+            ))
         # mount and thickness were already resolved (with host-mount features
         # and any bearing integration applied) at the top of this method --
         # reuse them instead of re-resolving with a stale call signature.
@@ -763,8 +796,18 @@ class App(ctk.CTk):
         self._selected_bearing = None
         if topology != TOPOLOGY_NONE:
             designation = self.bearing_var.get()
+            # Which shaft the bearing has to fit depends on the topology, and
+            # getting this wrong is silent. Direct runs on the MOTOR's shaft,
+            # so the motor's own diameter governs and the picker field is not
+            # a free choice -- selecting for 8mm on a NEMA 17 quietly picked a
+            # 608 for a 5mm shaft and reported an 11mm plate. Stub-shaft turns
+            # its own shaft, so there the field is a real input.
+            if topology == TOPOLOGY_DIRECT:
+                shaft_dia = mount.shaft_dia_mm or float(self.shaft_dia_var.get())
+            else:
+                shaft_dia = float(self.shaft_dia_var.get() or mount.shaft_dia_mm)
             selection = select_bearing(
-                load_type, load_n, float(self.shaft_dia_var.get()),
+                load_type, load_n, shaft_dia,
                 safety_factor, None if designation == "auto" else designation,
             )
             if selection.bearing is None:

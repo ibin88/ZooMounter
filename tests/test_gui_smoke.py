@@ -28,8 +28,15 @@ from zoomounter.gui import TOPOLOGY_NONE, App  # noqa: E402
 from zoomounter.mount_specs import MOUNTS  # noqa: E402
 
 
-@pytest.fixture
-def app():
+@pytest.fixture(scope="module")
+def _app():
+    """One window for the whole module.
+
+    Deliberately module-scoped. Building and tearing down a Tk root per test
+    made these skip intermittently -- roughly two of seventeen, and only when
+    the full suite ran ahead of them, which is the worst kind of flake: it
+    looks like a display problem and is actually resource churn.
+    """
     try:
         instance = App()
     except tkinter.TclError as e:  # pragma: no cover -- headless machine
@@ -39,6 +46,32 @@ def app():
         yield instance
     finally:
         instance.destroy()
+
+
+@pytest.fixture
+def app(_app):
+    """The shared window, returned to its startup state.
+
+    Sharing a window means one test's selections leak into the next unless
+    something puts them back. Resetting through the same _on_*_change handlers
+    the widgets call keeps the reset honest -- if a handler breaks, this breaks
+    with it rather than papering over it.
+    """
+    _app.mount_var.set("nema17")
+    _app.material_var.set("aluminum_6061")
+    _app.topology_var.set(TOPOLOGY_NONE)
+    _app.host_mount_var.set("none")
+    _app.mounting_face_var.set("front")
+    _app.load_var.set("5")
+    _app.plate_load_var.set("0")
+    _app.safety_var.set("2.0")
+    _app.overhang_var.set("")
+    _app.bearing_var.set("auto")
+    _app._on_mount_change("nema17")
+    _app._on_material_change("aluminum_6061")
+    _app._on_topology_change(TOPOLOGY_NONE)
+    _app._on_host_mount_change("none")
+    return _app
 
 
 def test_the_window_builds(app):
@@ -97,3 +130,92 @@ def test_resolving_a_spec_with_each_topology(app, topology):
     assert mount.bearing_topology == topology
     assert thickness.required_thickness_mm > 0
     assert any(c.code for c in decision.checks)
+
+
+# ---------------------------------------------------------------------------
+# The form has to fit, and its inputs have to mean what they say.
+# ---------------------------------------------------------------------------
+
+
+def test_the_form_scrolls(app):
+    """The form is taller than the window and grows as options appear. In a
+    plain frame the load fields and the Generate button went off the bottom
+    edge with no way to reach them."""
+    assert isinstance(app._form, ctk.CTkScrollableFrame)
+
+
+def test_shaft_diameter_follows_the_selected_mount(app):
+    """It defaulted to 8mm for everything. Selecting a NEMA 17 -- a 5mm shaft
+    -- and asking for a bearing therefore sized one for 8mm, picked a 608, and
+    reported an 11mm plate. Wrong three steps before it was visible."""
+    for key, spec in MOUNTS.items():
+        if not spec.shaft_dia_mm:
+            continue
+        app.mount_var.set(key)
+        app._on_mount_change(key)
+        assert float(app.shaft_dia_var.get()) == spec.shaft_dia_mm
+
+
+def test_direct_topology_selects_for_the_motors_shaft_not_the_field(app):
+    """Direct runs on the MOTOR's shaft, so the picker field is not a free
+    choice there. Typing 8 against a NEMA 17 must not pick an 8mm bearing."""
+    app.mount_var.set("nema17")
+    app._on_mount_change("nema17")
+    app.topology_var.set("direct")
+    app.shaft_dia_var.set("8")  # deliberately wrong for this motor
+    mount, *_ = app._resolve_spec()
+    assert mount.bearing_bore_mm == MOUNTS["nema17"].shaft_dia_mm
+
+
+# ---------------------------------------------------------------------------
+# The schematic has to answer to the controls above it.
+# ---------------------------------------------------------------------------
+
+
+def _schematic_geometry(app):
+    """Every drawn coordinate, as a flat tuple -- enough to tell whether two
+    renders differ without asserting anything about how it looks."""
+    canvas = app.schematic_canvas
+    return tuple(
+        tuple(canvas.coords(item)) for item in canvas.find_all()
+    )
+
+
+def test_the_mounting_face_changes_the_schematic(app):
+    """The face control redrew the canvas and changed nothing: the motor body
+    was always drawn on +Z. The control looked live and was inert.
+
+    The mount GEOMETRY legitimately does not change with the face -- only the
+    assembly does -- but a picture that ignores the setting is describing a
+    different build to the one that will be generated."""
+    app.mounting_face_var.set("front")
+    front = _schematic_geometry_after(app)
+    app.mounting_face_var.set("back")
+    back = _schematic_geometry_after(app)
+    assert front, "schematic drew nothing at all"
+    assert front != back, (
+        "front and back produced an identical schematic -- the mounting face "
+        "control is not reaching the drawing"
+    )
+
+
+def _schematic_geometry_after(app):
+    app.host_mount_var.set("2020-slots")
+    app._on_host_mount_change("2020-slots")
+    app._draw_schematic()
+    app.update_idletasks()
+    return _schematic_geometry(app)
+
+
+def test_the_stub_shaft_standoff_reaches_the_schematic(app):
+    """The standoff is real geometry -- the motor genuinely sits 30mm off the
+    plate -- so a schematic that omits it is drawing the direct topology while
+    the report describes the stub-shaft one."""
+    app.mount_var.set("nema17")
+    app._on_mount_change("nema17")
+    app.topology_var.set("none")
+    plain = _schematic_geometry_after(app)
+    app.topology_var.set("stub-shaft")
+    app._on_topology_change("stub-shaft")
+    stubbed = _schematic_geometry_after(app)
+    assert plain != stubbed
