@@ -69,8 +69,13 @@ class App(ctk.CTk):
 
         self._build_form()
         self._build_results()
+        # Every panel's visibility and help text is derived from its variable,
+        # so drive each one once at startup rather than duplicating the initial
+        # state in _build_form and letting the two drift.
         self._on_mount_change(self.mount_var.get())
         self._on_material_change(self.material_var.get())
+        self._on_topology_change(self.topology_var.get())
+        self._on_host_mount_change(self.host_mount_var.get())
 
     # ---- form -----------------------------------------------------------
 
@@ -296,12 +301,10 @@ class App(ctk.CTk):
             self.custom_mount_frame.grid()
         else:
             self.custom_mount_frame.grid_remove()
-        
-        if value == "bearing":
-            self.integrate_bearing_cb.grid_remove()
-        else:
-            self.integrate_bearing_cb.grid()
-            
+
+        # Showing or hiding the topology picker is _on_bearing_visibility's
+        # job now -- it owns both that and the bearing picker, so the two
+        # cannot disagree about whether a bearing is in play.
         self._on_bearing_visibility(value)
         self._draw_schematic()
 
