@@ -427,7 +427,7 @@ def generate_mount(
     report_path = out_dir / "inspection_report.md"
     write_report(
         report_path, m.name, mat.name, shaft_load_n, safety_factor, t, result,
-        decision=decision,
+        decision=decision, mount_kind=m.kind, process=mat.process,
     )
 
     payload.update(

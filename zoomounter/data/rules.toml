@@ -1,0 +1,270 @@
+# The rule registry. Loaded and validated by zoomounter/rules.py.
+#
+# Every engineering claim ZooMounter makes is declared here, with where it came
+# from and how much it can be trusted. Python evaluates rules; it does not own
+# them. See RULES.md for how to add one.
+#
+# REQUIRED FIELDS
+#   id          stable identifier. Check.code must match a rule id, so a
+#               message the user sees can always be traced back to a rule.
+#   statement   the claim, in one sentence, in engineering terms.
+#   applies_to  which components it governs. {} means "everything".
+#   source      where the claim comes from. Never one of our own documents.
+#   severity    pass | info | warn | loud-warn -- how loudly a violation speaks.
+#   status      see below. This is the field that matters most.
+#   remedy      what the user should actually do about it.
+#
+# STATUS -- the whole point of this file
+#
+#   vendor-datasheet          a manufacturer published it for a specific part.
+#   standard                  a published standard (ISO, NEMA) states it.
+#   derived                   we reasoned it out. Defensible, but ours -- so it
+#                             is labelled as ours rather than borrowing the
+#                             authority of the two above.
+#   ai-proposed-unverified    an AI suggested it and nobody has checked it.
+#                             QUARANTINED: never governs a generated part.
+#   verified-against-physical someone built it and measured it.
+#
+# This project's entire finding is that an AI-generated number looks identical
+# to a verified one. The NEMA bolt-circle bug and the shaft-end lever-arm bug
+# both survived a green test suite and a passing verifier because a wrong
+# number and a right one are indistinguishable once written down. Making
+# provenance a required structural field is the fix. It is also what makes AI
+# collaboration safe here: a proposal is visibly quarantined until reality
+# checks it, rather than blending into the catalogue on arrival.
+
+# ---------------------------------------------------------------------------
+# Shaft loads. The tool's primary question.
+# ---------------------------------------------------------------------------
+
+[[rule]]
+id         = "shaft_limit"
+statement  = "A load applied at the shaft must not exceed the component's published shaft rating, because that rating protects the motor's internal bearings and no bracket thickness can raise it."
+applies_to = { kind = "motor" }
+source     = "Per-component figures in data/mounts.toml, each carrying its own datasheet citation."
+severity   = "loud-warn"
+status     = "vendor-datasheet"
+remedy     = "Support the shaft in its own bearing and drive through a coupling, so the load reacts into the frame rather than the motor."
+
+[[rule]]
+id         = "shaft_limit_unknown"
+statement  = "A component with no published shaft rating must report the load as unchecked, never as passing."
+applies_to = { kind = "motor" }
+source     = "Project policy, from the 67N defect: a single axial limit was applied to every motor, and a NEMA 17 at many times its own rating passed silently."
+severity   = "warn"
+status     = "derived"
+remedy     = "Find the rating in your part's datasheet. If it is radial, record the distance it is quoted at -- it is a moment limit."
+
+[[rule]]
+id         = "radial_rating_is_a_moment"
+statement  = "A radial shaft rating is a moment limit quoted at a stated distance from the mounting flange, so an applied load and the rating must both be converted to moments before being compared."
+applies_to = { kind = "motor" }
+source     = "JK42HSxx-series datasheet: 'Max. radial force 28N (20mm from the flange)'. 57HS-series NEMA 23: 'Max. radial force 75N (20mm from the flange)'."
+severity   = "info"
+status     = "vendor-datasheet"
+remedy     = "Pass the real distance your load acts at. At twice the rated distance, half the rated force is the limit."
+
+[[rule]]
+id         = "bearing_advisory_utilisation"
+statement  = "A shaft load above 70% of its published rating should be flagged even though it has not exceeded it."
+applies_to = { kind = "motor" }
+source     = "OURS, not a datasheet figure. Published ratings are absolute maxima with no stated margin, quoted for a steadier load than a real machine delivers: belt tension varies with temperature and wear, and a hard stop delivers a transient well above nominal."
+severity   = "warn"
+status     = "derived"
+remedy     = "Treat it as a design margin question. If the load is well characterised, 85% may be fine; if it is an estimate, it is not."
+
+[[rule]]
+id         = "plate_load_unmodelled"
+statement  = "A load fastened to the bracket is not a shaft load and must never be compared against a shaft rating."
+applies_to = {}
+source     = "Project policy, from the defect where the CLI asked for 'expected load on the mount' and measured the answer against the motor's shaft rating -- so a camera bolted to the plate reported an overload that cannot physically happen."
+severity   = "warn"
+status     = "derived"
+remedy     = "Check the plate and its fasteners yourself. ZooMounter sizes for manufacturability and bearing fit, not for arbitrary bracket loads."
+
+# ---------------------------------------------------------------------------
+# Thickness. Manufacturing floors, not structural results.
+# ---------------------------------------------------------------------------
+
+[[rule]]
+id         = "process_floor_governs"
+statement  = "Plate thickness is set by the minimum wall the chosen process can produce, not by the load, for every part in ZooMounter's scope."
+applies_to = {}
+source     = "Measured against the catalogue: the largest in-scope shaft rating is 75N, and the resulting structural requirement lands below every process floor in materials.py."
+severity   = "info"
+status     = "derived"
+remedy     = "None needed. If your case is genuinely structural, ZooMounter is the wrong tool -- it does not size plates against loads."
+
+[[rule]]
+id         = "bearing_seat_governs"
+statement  = "A plate holding a bearing must be at least as thick as the seat that bearing needs, counted as a floor alongside the process minimum rather than checked afterwards."
+applies_to = {}
+source     = "Geometric necessity: a 9mm counterbore in a 1mm plate is not a thin part, it is a part that cannot exist."
+severity   = "info"
+status     = "derived"
+remedy     = "None needed -- the thickness already accounts for it."
+
+[[rule]]
+id         = "thermal_unmodelled"
+statement  = "Thermal creep is not modelled, and a printed bracket bolted directly to a motor can sag in service at a load it held when new."
+applies_to = { process = "3d_print" }
+source     = "Stepper motor case temperatures of 70-80 C are routine and within manufacturer ratings; PLA's glass transition is approximately 60 C, below that range."
+severity   = "warn"
+status     = "derived"
+remedy     = "Print in PETG or ABS, add a thermal break or standoffs between motor and bracket, or machine the part in metal."
+
+# ---------------------------------------------------------------------------
+# Geometry. Where this project's most expensive bugs lived.
+# ---------------------------------------------------------------------------
+
+[[rule]]
+id         = "nema_pattern_is_square"
+statement  = "A NEMA faceplate is dimensioned as a square spacing between hole centres, not as a bolt-circle diameter."
+applies_to = { kind = "motor" }
+source     = "NEMA motor faceplate dimensioning, as published on every manufacturer datasheet in data/mounts.toml."
+severity   = "loud-warn"
+status     = "standard"
+remedy     = "Declare bolt_pattern.type = 'square'. Feeding a square spacing to a circular pattern puts holes at the edge midpoints -- 6.4mm out on every hole of a NEMA 17, and the plate will not bolt on."
+
+[[rule]]
+id         = "bolt_holes_are_clearance"
+statement  = "A mounting hole must be at least the ISO 273 close-clearance diameter for its screw, or the screw physically will not pass through."
+applies_to = {}
+source     = "ISO 273: M2.5 -> 2.7mm, M3 -> 3.2mm, M4 -> 4.3mm, M5 -> 5.3mm (close series)."
+severity   = "loud-warn"
+status     = "standard"
+remedy     = "Size the hole from the table, not from the screw's nominal diameter. A 3.0mm hole is an interference fit on an M3, not a clearance hole."
+
+[[rule]]
+id         = "shaft_is_not_the_centre_bore"
+statement  = "A mount's centre hole clears the component's pilot boss and is not its shaft diameter, so bearing selection must read the shaft."
+applies_to = { kind = "motor" }
+source     = "NEMA 17: 22mm pilot boss, 5mm shaft. NEMA 23: 38.1mm boss, 8mm shaft."
+severity   = "loud-warn"
+status     = "standard"
+remedy     = "Select bearings from shaft_dia_mm. Using the centre bore picks a bearing roughly four sizes too large."
+
+# ---------------------------------------------------------------------------
+# Catalogue integrity. Enforced at load time; a bad row stops the import.
+# ---------------------------------------------------------------------------
+
+[[rule]]
+id         = "every_figure_carries_a_source"
+statement  = "Every published figure in the catalogue must carry a citation, and that citation must not be one of our own documents."
+applies_to = {}
+source     = "Project policy, from the defect where a published axial limit cited one of this project's own write-ups instead of a manufacturer -- provenance that points back at us proves nothing."
+severity   = "loud-warn"
+status     = "derived"
+remedy     = "Cite the manufacturer datasheet or the standard. If you cannot find one, the figure is not ready to ship."
+
+[[rule]]
+id         = "rating_carries_its_conditions"
+statement  = "A rating must ship with the conditions it was measured under, and a radial rating without its measurement distance must be rejected rather than compared."
+applies_to = {}
+source     = "Project policy, from three instances of the same defect: 15N read as 15lb, a square spacing read as a bolt circle, and a rating measured at 20mm compared against a load applied at 15mm."
+severity   = "loud-warn"
+status     = "derived"
+remedy     = "Record max_radial_at_mm alongside max_radial_n. If the datasheet does not state a distance, drop the rating."
+
+[[rule]]
+id         = "thrust_static_exceeds_dynamic"
+statement  = "A thrust bearing's static rating exceeds its dynamic rating, and a row the other way round indicates a transcription or unit error."
+applies_to = { kind = "bearing" }
+source     = "Bearing rating convention: static capacity (C0) is a permanent-deformation limit and exceeds dynamic capacity (C) for thrust bearings."
+severity   = "loud-warn"
+status     = "standard"
+remedy     = "Re-read the catalogue entry before adding it. This check is why F5-10M is not in bearings.toml."
+
+# ---------------------------------------------------------------------------
+# Bearing selection.
+# ---------------------------------------------------------------------------
+
+[[rule]]
+id         = "bearing_kind_matches_load"
+statement  = "A radial load needs a deep-groove bearing and an axial load needs a thrust bearing; the two are not interchangeable."
+applies_to = { kind = "bearing" }
+source     = "Bearing type definitions: thrust bearings carry no meaningful radial load, and deep-groove bearings take only limited thrust."
+severity   = "loud-warn"
+status     = "standard"
+remedy     = "Let selection choose, or pick the type that matches the load direction."
+
+[[rule]]
+id         = "bearing_selection"
+statement  = "A selected bearing's static rating must exceed the applied load multiplied by the safety factor."
+applies_to = { kind = "bearing" }
+source     = "Per-bearing C0 figures in data/bearings.toml, each carrying its own catalogue citation."
+severity   = "loud-warn"
+status     = "vendor-datasheet"
+remedy     = "Choose a larger bearing, reduce the load, or lower the safety factor if it is over-specified."
+
+[[rule]]
+id         = "bearing_life"
+statement  = "Bearing selection is made on basic static rating C0 alone; no L10 fatigue life is calculated, because that needs shaft speed and duty cycle which this tool does not ask for."
+applies_to = { kind = "bearing" }
+source     = "ISO 281 defines L10 life from the dynamic rating C, the applied load, and speed. C0 governs permanent deformation under static or slow-moving load, which is a different question."
+severity   = "warn"
+status     = "standard"
+remedy     = "For anything running continuously, do an L10 calculation with your real speed and duty against the bearing's dynamic rating C."
+
+[[rule]]
+id         = "bearing_seat"
+statement  = "A bearing seat must be deep enough to capture the bearing's outer ring and leave a floor beneath it."
+applies_to = { kind = "bearing" }
+source     = "Geometric necessity, with a 2mm floor so a blind counterbore does not open into the shaft through-hole."
+severity   = "loud-warn"
+status     = "derived"
+remedy     = "Thicken the plate, or house the bearing in a separate block and bolt that to this plate."
+
+[[rule]]
+id         = "bearing_fit"
+statement  = "A bearing seat bored to the bearing's nominal OD is a slip fit, not the interference fit a load-carrying seat needs."
+applies_to = { kind = "bearing" }
+source     = "ISO 286 shaft/housing fit classes; a press fit for a rotating-load housing is typically H7/k6 or tighter."
+severity   = "warn"
+status     = "derived"
+remedy     = "Adjust the bore for your process and expected shrinkage, or retain the bearing mechanically. ZooMounter does not model fit tolerance."
+
+# ---------------------------------------------------------------------------
+# Declared limitations. No evaluator -- these are things the tool does NOT
+# check, recorded so their absence is visible rather than implied.
+# ---------------------------------------------------------------------------
+
+[[rule]]
+id         = "reaction_torque_unmodelled"
+statement  = "A motor's reaction torque is not modelled, though it is present whenever the motor runs and is reacted as shear in the bolt pattern at the bolt-circle radius."
+applies_to = { kind = "motor" }
+source     = "Newton's third law. A NEMA 23 at 1.9 N.m across a 47.14mm square pattern puts roughly 28N on each bolt, fully reversing on a bidirectional axis."
+severity   = "warn"
+status     = "derived"
+evaluated  = false
+remedy     = "For a reversing axis, check the bolts for fatigue and use thread locker. ZooMounter sizes neither."
+
+[[rule]]
+id         = "fatigue_unmodelled"
+statement  = "Fatigue is not modelled, and a reversing axis loads its bracket cyclically at a level a static check calls safe."
+applies_to = {}
+source     = "Standard fatigue behaviour: endurance limits sit well below yield, and aluminium has no true endurance limit at all."
+severity   = "warn"
+status     = "derived"
+evaluated  = false
+remedy     = "For a high-cycle reversing application, have the bracket reviewed properly. This tool performs no fatigue analysis."
+
+[[rule]]
+id         = "impact_unmodelled"
+statement  = "Crash and hard-stop impact loads are not modelled, and they can exceed the nominal running load by an order of magnitude."
+applies_to = {}
+source     = "Transient impact behaviour on machine axes; the peak depends on stiffness and closing speed, neither of which ZooMounter knows."
+severity   = "warn"
+status     = "derived"
+evaluated  = false
+remedy     = "Add soft limits and physical stops. Do not treat the running load as the worst case."
+
+[[rule]]
+id         = "belt_pretension_unmodelled"
+statement  = "Belt pretension is not modelled, and it loads the shaft at zero torque before any useful work is done."
+applies_to = { kind = "motor" }
+source     = "Belt drive practice: pretension is typically a substantial fraction of the rated working tension and is present continuously."
+severity   = "warn"
+status     = "derived"
+evaluated  = false
+remedy     = "Add your pretension to the shaft load you pass in. It does not go away when the machine is idle."

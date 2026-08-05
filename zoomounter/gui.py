@@ -1123,6 +1123,7 @@ class App(ctk.CTk):
         write_report(
             report_path, mount.name, material.name, load_n, safety_factor,
             thickness, result, preview_path=report_preview, decision=decision,
+            mount_kind=mount.kind, process=material.process,
         )
         self.after(0, lambda: self._on_generate_done(result, report_path))
 

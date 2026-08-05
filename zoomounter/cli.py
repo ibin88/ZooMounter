@@ -2,9 +2,14 @@
 
 Usage (scripted):
     python -m zoomounter.cli --mount nema17 --material aluminum_6061 \\
-        --load-n 5 --safety-factor 2
+        --shaft-load-n 5 --load-type radial --safety-factor 2
 
 Usage (interactive): run with no flags and answer the prompts.
+
+The headline output is the shaft verdict, not the plate thickness. `--load-n`
+still works and maps to `--shaft-load-n`, which is what it was always compared
+against, but it warns: a load bolted to the bracket belongs in `--plate-load-n`
+and is not a shaft check.
 """
 
 import argparse
@@ -573,6 +578,31 @@ def _shaft_section(decision) -> str:
     return body
 
 
+def _limitations_section(kind: str | None, process: str | None) -> str:
+    """What the tool does NOT check, read from the rule registry.
+
+    An unmodelled load case that nobody mentions is indistinguishable from one
+    that passed. These are declared in data/rules.toml with `evaluated = false`
+    so they cannot quietly disappear: adding a limitation to the registry puts
+    it in this report, and removing it from the report means removing the claim.
+    """
+    from . import rules as rules_mod
+
+    limits = rules_mod.limitations(kind=kind, process=process)
+    if not limits:
+        return ""
+    body = (
+        "\n## What this report does NOT cover\n\n"
+        "These are declared limitations, not oversights. Each is recorded in "
+        "`zoomounter/data/rules.toml` with its reasoning.\n\n"
+    )
+    for rule in limits:
+        body += f"- **{rule.statement}**\n"
+        body += f"  - *Basis*: {rule.source}\n"
+        body += f"  - *What to do*: {rule.remedy}\n"
+    return body
+
+
 def write_report(
     path: Path,
     mount_name: str,
@@ -583,6 +613,8 @@ def write_report(
     result: verify.VerificationResult,
     preview_path: Path | None = None,
     decision=None,
+    mount_kind: str | None = None,
+    process: str | None = None,
 ) -> None:
     status = "PASS" if result.passed else "FAIL"
     notes_block = ""
@@ -669,8 +701,12 @@ file (local parse, no API calls). Volume is measured by Zoo's File Format API.
 {check_rows}
 
 Tolerances: {POSITION_TOLERANCE_MM}mm absolute on hole positions, {int(verify.TOLERANCE_FRACTION * 100)}% on bulk dimensions and volume.
-{hole_rows}{mass_line}
+{hole_rows}{mass_line}{_limitations_section(mount_kind, process)}
 ## Result: {status}
+
+*Verification proves the generated part matches the spec it was asked for. It
+cannot prove the spec was right -- that is what the rule registry and its
+provenance statuses are for. See `RULES.md`.*
 """
     path.write_text(report, encoding="utf-8")
 
@@ -900,7 +936,7 @@ def main(argv: list[str] | None = None) -> int:
     write_report(
         report_path, mount.name, material.name, args.shaft_load_n,
         args.safety_factor, thickness, result, preview_path=preview_path,
-        decision=decision,
+        decision=decision, mount_kind=mount.kind, process=material.process,
     )
 
     console.print()
