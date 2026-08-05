@@ -256,17 +256,32 @@ def test_the_preview_diagram_follows_the_mounting_face(app):
     )
 
 
-def test_the_preview_diagram_mirrors_rather_than_shifting(app):
-    """A real mirror puts the motor on the other side of the plate. Anything
-    that merely nudges it would pass the inequality above while still showing
-    the wrong build."""
+def test_the_preview_diagram_reorders_the_parts_rather_than_mirroring(app):
+    """The face is not a viewpoint, so mirroring the picture is not a fix --
+    the same build seen from the other side is the same build.
+
+    What changes is the ORDER of the parts along the shaft axis. Front-mounted,
+    the plate is between the motor and the load, because the shaft passes
+    through it. Rear-mounted, the motor is between the plate and the load,
+    because the shaft leaves the far end and never enters the plate.
+
+    An earlier version of this test asserted a mirror and passed while the
+    diagram was wrong, which is why it is written in terms of order now."""
+    # Drawing order is fixed: motor rectangle first, plate rectangle third.
     front = _shaft_diagram_geometry(app, "front")
     back = _shaft_diagram_geometry(app, "back")
-    # The motor block is the first rectangle drawn in both cases.
-    front_motor_x = sum(front[0][::2]) / 2
-    back_motor_x = sum(back[0][::2]) / 2
-    assert (front_motor_x - 260) * (back_motor_x - 260) < 0, (
-        "the motor stayed on the same side of centre"
+
+    def centre_x(item):
+        return sum(item[::2]) / 2
+
+    front_motor, front_plate = centre_x(front[0]), centre_x(front[2])
+    back_motor, back_plate = centre_x(back[0]), centre_x(back[2])
+
+    assert front_motor < front_plate, (
+        "front-mounted: the plate must sit between the motor and the load"
+    )
+    assert back_plate < back_motor, (
+        "rear-mounted: the motor must sit between the plate and the load"
     )
 
 

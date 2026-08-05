@@ -305,6 +305,55 @@ def shaft_support(
     )
 
 
+REAR_FACE_MOUNTING = "rear_face_mounting"
+
+
+def face_checks(mount: MountSpec, face: str) -> list[Check]:
+    """What follows from bolting the motor by one face rather than the other.
+
+    The mounting face is not a viewpoint. Front-mounted, the plate bolts to the
+    shaft-end faceplate and the shaft passes through it. Rear-mounted, the
+    shaft leaves the far end of the motor and never touches the plate. Those
+    are different builds with different consequences, and the tool used to
+    treat the choice as a display option -- which is why it produced identical
+    output for both.
+    """
+    if mount.kind != "motor" or face != "back":
+        return []
+
+    checks = [
+        Check(
+            level="WARN",
+            message=(
+                f"Rear-face mounting: the shaft points away from this plate and "
+                f"never passes through it. Confirm your {mount.name} actually has "
+                f"rear tapped holes -- the NEMA standard puts the bolt pattern, "
+                f"pilot boss and shaft all on the FRONT face, and rear holes are "
+                f"a per-model extra that many frames do not have."
+            ),
+            remedy=(
+                "Check the datasheet for your specific motor. If it has no rear "
+                "holes, mount by the front face instead."
+            ),
+            code=REAR_FACE_MOUNTING,
+        )
+    ]
+    if mount.center_hole_dia_mm > 0:
+        checks.append(
+            Check(
+                level="INFO",
+                message=(
+                    f"The {mount.center_hole_dia_mm:g}mm centre bore clears a pilot "
+                    f"boss that is on the other end of the motor in this "
+                    f"configuration. Nothing registers in it, though it is still "
+                    f"useful as a cable pass-through."
+                ),
+                code=REAR_FACE_MOUNTING,
+            )
+        )
+    return checks
+
+
 def required_thickness(
     mount: MountSpec,
     material: Material,

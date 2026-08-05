@@ -178,7 +178,7 @@ class App(ctk.CTk):
         self.plate_width_override_var = self._labeled_entry(self.host_mount_frame, 1, "Plate width override (mm, blank=auto)", "")
         self.plate_width_override_var.trace_add("write", lambda *_: self._draw_schematic())
         
-        ctk.CTkLabel(self.host_mount_frame, text="Component face").grid(row=3, column=0, sticky="w")
+        ctk.CTkLabel(self.host_mount_frame, text="Motor face on plate").grid(row=3, column=0, sticky="w")
         self.mounting_face_var = ctk.StringVar(value="front")
         ctk.CTkOptionMenu(
             self.host_mount_frame, values=["front", "back"],
@@ -483,12 +483,14 @@ class App(ctk.CTk):
             bw = base.plate_width_mm / 2
             bh = base.plate_height_mm / 2
             front = self.mounting_face_var.get() == "front"
-            sgn = 1.0 if front else -1.0
-            # A stub-shaft topology stands the motor off for the coupling.
-            # That is real geometry, so it belongs in the picture too.
+            # The motor sits ON the plate whichever of its faces is bolted --
+            # it is fastened to it. What the face selects is which END of the
+            # motor is against the plate, and therefore where the shaft goes.
+            # An earlier version moved the body to the other side of the plate,
+            # which is the same build seen from underneath.
             standoff = getattr(mount, "motor_standoff_mm", 0.0) or 0.0
-            base_z = (T + standoff) if front else (-standoff)
-            top = base_z + sgn * body_len
+            base_z = T + standoff
+            top = base_z + body_len
             shapes.append({
                 "pts": [(bw, -bh, base_z), (bw, bh, base_z), (bw, bh, top), (bw, -bh, top)],
                 "fill": "#333333", "outline": "#777777", "width": 1,
@@ -502,9 +504,10 @@ class App(ctk.CTk):
                 "fill": "#444444", "outline": "#777777", "width": 1,
             })
             labels.append((
-                (0, 0, top), "motor" + (f"  (+{standoff:.0f}mm standoff)" if standoff else ""),
-                "#aaaaaa", ("Arial", 8), (0, -8 if front else 8),
-                "s" if front else "n",
+                (0, 0, top),
+                ("motor, shaft face down" if front else "motor, rear face down")
+                + (f"  (+{standoff:.0f}mm standoff)" if standoff else ""),
+                "#aaaaaa", ("Arial", 8), (0, -8), "s",
             ))
 
             # The shaft. Without it the motor is a floating block and the one
@@ -519,21 +522,33 @@ class App(ctk.CTk):
             shaft_dia = base.shaft_dia_mm
             if shaft_dia > 0:
                 sr = shaft_dia / 2
-                if standoff > 0:
+                if not front:
+                    # Rear-mounted: the shaft leaves the motor's FAR end and
+                    # runs away from the plate. It never enters it, so the
+                    # plate needs no shaft clearance at all. This is the whole
+                    # difference between the two mountings, and the reason
+                    # mirroring the picture was not a fix.
+                    shaft_end = top + 20.0
+                    shapes.append({
+                        "pts": [(-sr, 0, top), (sr, 0, top),
+                                (sr, 0, shaft_end), (-sr, 0, shaft_end)],
+                        "fill": "#c8ccd2", "outline": "#e8ecf2", "width": 1,
+                    })
+                elif standoff > 0:
                     # Stub-shaft: the motor's own shaft stops in the coupling,
                     # and a separate stub runs through the plate. Two shafts,
                     # because that is the whole claim of the topology.
-                    coupling_mid = base_z - sgn * (standoff * 0.5)
+                    coupling_mid = base_z - standoff * 0.5
+                    shaft_end = -20.0
                     shapes.append({
                         "pts": [(-sr, 0, base_z), (sr, 0, base_z),
                                 (sr, 0, coupling_mid), (-sr, 0, coupling_mid)],
                         "fill": "#c8ccd2", "outline": "#e8ecf2", "width": 1,
                     })
                     stub_r = (mount.bearing_bore_mm or shaft_dia) / 2
-                    stub_end = (-20.0) if front else (T + 20.0)
                     shapes.append({
                         "pts": [(-stub_r, 0, coupling_mid), (stub_r, 0, coupling_mid),
-                                (stub_r, 0, stub_end), (-stub_r, 0, stub_end)],
+                                (stub_r, 0, shaft_end), (-stub_r, 0, shaft_end)],
                         "fill": "#c8ccd2", "outline": "#e8ecf2", "width": 1,
                     })
                     labels.append((
@@ -542,17 +557,15 @@ class App(ctk.CTk):
                     ))
                 else:
                     # Straight through the plate and out the far side.
-                    shaft_end = (-20.0) if front else (T + 20.0)
+                    shaft_end = -20.0
                     shapes.append({
                         "pts": [(-sr, 0, base_z), (sr, 0, base_z),
                                 (sr, 0, shaft_end), (-sr, 0, shaft_end)],
                         "fill": "#c8ccd2", "outline": "#e8ecf2", "width": 1,
                     })
                 labels.append((
-                    (0, 0, (-20.0) if front else (T + 20.0)),
-                    f"shaft {shaft_dia:g}mm",
-                    "#c8ccd2", ("Arial", 8), (10, 10 if front else -10),
-                    "w",
+                    (0, 0, shaft_end), f"shaft {shaft_dia:g}mm",
+                    "#c8ccd2", ("Arial", 8), (10, -10 if front else 10), "w",
                 ))
         # mount and thickness were already resolved (with host-mount features
         # and any bearing integration applied) at the top of this method --
@@ -895,6 +908,23 @@ class App(ctk.CTk):
         )
         if decision is not None:
             decision.checks.extend(topology_checks)
+            face = self.mounting_face_var.get()
+            decision.checks.extend(mechanics.face_checks(base_mount, face))
+            if face == "back" and base_mount.motor_standoff_mm:
+                decision.checks.append(mechanics.Check(
+                    level="LOUD WARN",
+                    message=(
+                        "A stub-shaft topology needs the motor's shaft pointing "
+                        "AT the plate so a coupling can join them. Rear-face "
+                        "mounting points it the other way, so this combination "
+                        "cannot be built."
+                    ),
+                    remedy=(
+                        "Set the component face to 'front' for a stub shaft, or "
+                        "drop the topology and mount by the rear face."
+                    ),
+                    code=mechanics.REAR_FACE_MOUNTING,
+                ))
 
         thickness = mechanics.required_thickness(
             mount=mount,
@@ -1019,54 +1049,70 @@ class App(ctk.CTk):
             )
             return
 
-        # Which side the motor sits on. This diagram used to draw it on the
-        # left unconditionally, so switching the mounting face repainted an
-        # identical picture -- the same defect the inline schematic had, in a
-        # second drawing nobody thought to check.
+        # WHICH END OF THE MOTOR is bolted to the plate. Not which side of the
+        # plate the motor sits on -- that is the same build seen from the other
+        # side, and an earlier version of this diagram mirrored the whole
+        # layout, which changed the picture without changing what it depicted.
         #
-        # `d` mirrors the whole layout about the centre: +1 puts the motor left
-        # with the shaft running right, -1 the other way. Everything below is
-        # written in terms of d so the two cases cannot drift apart.
+        # front: plate on the shaft end, so the shaft passes THROUGH the plate
+        #        and the load ends up on the opposite side from the motor.
+        # back:  plate on the rear face, so the shaft leaves the motor's far
+        #        end and the load is on the SAME side, beyond the motor.
+        #
+        # Everything is laid out left-to-right in the order the parts actually
+        # sit along the shaft axis.
         face_front = self.mounting_face_var.get() == "front"
-        d = 1 if face_front else -1
         standoff_px = 62 if (mount is not None and getattr(mount, "motor_standoff_mm", 0)) else 0
-
-        plate_x = cx - d * 46
         plate_top, plate_h, plate_w = cy - 55, 110, 14
-        plate_near = plate_x - (plate_w / 2)   # face the motor looks at
-        plate_far = plate_x + (plate_w / 2)
+        motor_w = 78
 
-        # Motor body, offset back from the plate by the standoff if there is one.
-        motor_far = plate_near - d * (standoff_px + 78)
-        motor_near = plate_near - d * standoff_px
+        if face_front:
+            plate_near = cx - 46            # motor side
+            plate_far = plate_near + plate_w
+            motor_near = plate_near - standoff_px
+            motor_far = motor_near - motor_w
+            shaft_from = plate_far          # shaft emerges past the plate
+        else:
+            # Plate first, then the motor bolted to it by its rear face, then
+            # the shaft continuing beyond the motor.
+            plate_near = cx - 150
+            plate_far = plate_near + plate_w
+            motor_near = plate_far
+            motor_far = motor_near + motor_w
+            shaft_from = motor_far          # shaft leaves the motor's far end
+
         canvas.create_rectangle(
-            motor_far, cy - 38, motor_near, cy + 38, fill="#333", outline="gray"
+            min(motor_far, motor_near), cy - 38, max(motor_far, motor_near), cy + 38,
+            fill="#333", outline="gray",
         )
         canvas.create_text((motor_far + motor_near) / 2, cy, text="Motor", fill="gray70")
 
-        # The plate.
         canvas.create_rectangle(
             plate_near, plate_top, plate_far, plate_top + plate_h,
             fill="#2fa572", outline="white", width=2,
         )
         canvas.create_text(
-            plate_x, plate_top + plate_h + 12,
+            (plate_near + plate_far) / 2, plate_top + plate_h + 12,
             text=f"{thickness.required_thickness_mm:.2f}mm", fill="white",
         )
+        canvas.create_text(
+            (plate_near + plate_far) / 2, plate_top - 10,
+            text="bolted to shaft face" if face_front else "bolted to rear face",
+            fill="#9aa2ad", font=("Arial", 8),
+        )
 
-        if standoff_px:
+        if standoff_px and face_front:
             # Stub-shaft topology: the motor's own shaft stops in the coupling
             # and the plate carries a separate stub shaft. Drawing the gap is
             # the only way the picture distinguishes this from the direct case.
             canvas.create_rectangle(
-                motor_near, cy - 4, motor_near + d * (standoff_px * 0.35), cy + 4,
+                motor_near, cy - 4, motor_near + standoff_px * 0.35, cy + 4,
                 fill="#888", outline="black",
             )
-            coup_a = motor_near + d * (standoff_px * 0.2)
-            coup_b = motor_near + d * (standoff_px * 0.8)
+            coup_a = motor_near + standoff_px * 0.2
+            coup_b = motor_near + standoff_px * 0.8
             canvas.create_rectangle(
-                min(coup_a, coup_b), cy - 11, max(coup_a, coup_b), cy + 11,
-                fill="#6b7280", outline="#aaa",
+                coup_a, cy - 11, coup_b, cy + 11, fill="#6b7280", outline="#aaa",
             )
             canvas.create_text(
                 (coup_a + coup_b) / 2, cy - 20, text="coupling",
@@ -1077,19 +1123,19 @@ class App(ctk.CTk):
                 text=f"{mount.motor_standoff_mm:g}mm standoff",
                 fill="#9aa2ad", font=("Arial", 8),
             )
-            # Stub shaft starts inside the coupling.
             shaft_start = coup_b
         else:
-            shaft_start = plate_near
+            shaft_start = shaft_from
 
-        # The shaft, running out through the plate to where the load acts.
+        # The shaft, running out to where the load acts. Always to the right,
+        # because the layout above already placed the parts in axis order.
         shaft_len = 150
-        shaft_end = plate_far + d * shaft_len
+        shaft_end = shaft_from + shaft_len
         canvas.create_rectangle(
             min(shaft_start, shaft_end), cy - 5, max(shaft_start, shaft_end), cy + 5,
             fill="#888", outline="black",
         )
-        load_x = shaft_end - d * 18
+        load_x = shaft_end - 18
 
         if decision.load_type == "radial":
             canvas.create_line(
@@ -1097,28 +1143,30 @@ class App(ctk.CTk):
                 arrow=arrow_last, fill="#e05252", width=3,
             )
             canvas.create_text(
-                load_x + d * 6, cy - 62,
-                text=f"{decision.shaft_load_n:.0f} N", fill="#e05252",
-                anchor="w" if face_front else "e",
+                load_x + 6, cy - 62,
+                text=f"{decision.shaft_load_n:.0f} N", fill="#e05252", anchor="w",
             )
-            # The offset is the whole reason a radial rating needs a distance.
+            # The offset is the whole reason a radial rating needs a distance,
+            # and it is measured from the MOTOR's own shaft face -- the flange
+            # the datasheet quotes -- not from the plate. Those coincide only
+            # when the motor is front-mounted.
             dim_y = cy + 46
-            canvas.create_line(plate_far, dim_y, load_x, dim_y, fill="#777")
-            for x in (plate_far, load_x):
+            canvas.create_line(shaft_from, dim_y, load_x, dim_y, fill="#777")
+            for x in (shaft_from, load_x):
                 canvas.create_line(x, dim_y - 5, x, dim_y + 5, fill="#777")
             canvas.create_text(
-                (plate_far + load_x) / 2, dim_y + 12,
-                text=f"{decision.offset_mm:g}mm from face", fill="white",
+                (shaft_from + load_x) / 2, dim_y + 12,
+                text=f"{decision.offset_mm:g}mm from motor face", fill="white",
             )
         else:
             canvas.create_line(
-                load_x + d * 40, cy, load_x - d * 10, cy,
+                load_x + 40, cy, load_x - 10, cy,
                 arrow=arrow_last, fill="#e05252", width=3,
             )
             canvas.create_text(
-                load_x + d * 46, cy - 14,
+                load_x + 46, cy - 14,
                 text=f"{decision.shaft_load_n:.0f} N thrust", fill="#e05252",
-                anchor="w" if face_front else "e",
+                anchor="w",
             )
 
         if decision.utilisation is None:

@@ -123,7 +123,7 @@ def build_parser() -> argparse.ArgumentParser:
     asm = p.add_argument_group("Assembly options")
     asm.add_argument(
         "--mounting-face", choices=["front", "back"], default="front",
-        help="Which side of the plate the component body sits on. 'front' puts the body on +Z with the shaft passing down through the plate; 'back' flips it. Affects the assembly only, not the mount geometry.",
+        help="Which FACE OF THE MOTOR bolts to the plate. 'front' = the shaft-end faceplate, so the shaft passes through the plate and the load is on the far side (normal NEMA mounting). 'back' = the motor's rear face, so the shaft points away and never enters the plate, with the motor body between plate and load. Not a viewpoint: these are different builds.",
     )
     asm.add_argument(
         "--no-assembly", action="store_true",
@@ -883,6 +883,21 @@ def main(argv: list[str] | None = None) -> int:
         # A chosen topology IS the answer to the shaft question, so its notes
         # belong with the verdict rather than in the thickness breakdown.
         decision.checks.extend(topology_checks)
+        decision.checks.extend(mechanics.face_checks(base_mount, args.mounting_face))
+        if args.mounting_face == "back" and base_mount.motor_standoff_mm:
+            decision.checks.append(mechanics.Check(
+                level="LOUD WARN",
+                message=(
+                    "A stub-shaft topology needs the motor's shaft pointing AT "
+                    "the plate so a coupling can join them. Rear-face mounting "
+                    "points it the other way, so this combination cannot be built."
+                ),
+                remedy=(
+                    "Use --mounting-face front with --bearing-topology stub-shaft, "
+                    "or drop the topology and mount the motor by its rear face."
+                ),
+                code=mechanics.REAR_FACE_MOUNTING,
+            ))
 
     thickness = mechanics.required_thickness(
         mount=mount,

@@ -73,12 +73,26 @@ def test_write_assembly_requires_the_base_to_size_the_component(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_front_and_back_put_the_body_on_opposite_sides():
+# These three tests replace an earlier set that encoded the wrong meaning of
+# the mounting face. That version asserted the body moved to the other SIDE of
+# the plate and the shaft's extrude flipped sign with it -- which is not a
+# physical choice at all. Putting the motor below the plate rather than above
+# it is the same assembly viewed from underneath, so the control mirrored the
+# picture and changed nothing about the build. The old assertions passed the
+# whole time and were describing the defect.
+#
+# What the face actually selects is WHICH END of the motor is bolted down, and
+# the observable consequence is where the shaft goes.
+
+
+def test_the_body_sits_on_the_plate_whichever_face_is_bolted():
+    """The motor is fastened to the plate, so it is on the same side of it
+    either way. Only which of its own ends is against the plate changes."""
     base = get_mount("nema17")
     front = _nums(component_kcl(base, THICK, FACE_FRONT), "motorBodyPlane")
     back = _nums(component_kcl(base, THICK, FACE_BACK), "motorBodyPlane")
     assert front[-1] == pytest.approx(THICK / 2)
-    assert back[-1] == pytest.approx(-THICK / 2)
+    assert back[-1] == pytest.approx(THICK / 2)
 
 
 def _extrude_length(kcl, region):
@@ -99,21 +113,49 @@ def test_the_body_extends_away_from_the_plate_on_both_faces():
     standing it on the face."""
     base = get_mount("nema17")
     body_len = base.body_cg_offset_mm * 2
-    for face, expect in ((FACE_FRONT, body_len), (FACE_BACK, -body_len)):
-        kcl = component_kcl(base, THICK, face)
-        assert _extrude_length(kcl, "motorBodyRegion") == pytest.approx(expect)
-
-
-def test_the_shaft_runs_through_the_plate_opposite_the_body():
-    """The shaft has to come out the far side, so its extrude is signed
-    against the body's."""
-    base = get_mount("nema17")
     for face in (FACE_FRONT, FACE_BACK):
         kcl = component_kcl(base, THICK, face)
-        body = _extrude_length(kcl, "motorBodyRegion")
-        shaft = _extrude_length(kcl, "shaftRegion")
-        assert body * shaft < 0, "shaft and body must extend opposite ways"
-        assert abs(shaft) == pytest.approx(THICK + assembly.SHAFT_STUB_MM)
+        assert _extrude_length(kcl, "motorBodyRegion") == pytest.approx(body_len)
+
+
+def _shaft_span(kcl):
+    start = _nums(kcl, "shaftPlane")[-1]
+    return start, start + _extrude_length(kcl, "shaftRegion")
+
+
+def test_a_front_mounted_shaft_passes_through_the_plate():
+    """Bolting by the shaft-end faceplate is what puts the shaft through the
+    plate -- and is why a NEMA plate has a pilot bore at all."""
+    base = get_mount("nema17")
+    _start, end = _shaft_span(component_kcl(base, THICK, FACE_FRONT))
+    assert end < -THICK / 2, "front-mounted shaft must come out the far side"
+
+
+def test_a_rear_mounted_shaft_never_touches_the_plate():
+    """Bolting by the rear face points the shaft the other way. It leaves the
+    far end of the motor and runs away from the plate, so the plate needs no
+    shaft clearance at all.
+
+    This is the distinction the old tests missed: with the wrong model, `back`
+    still ran the shaft through the plate and merely drew the whole thing
+    upside down."""
+    base = get_mount("nema17")
+    body_len = base.body_cg_offset_mm * 2
+    start, end = _shaft_span(component_kcl(base, THICK, FACE_BACK))
+    assert start == pytest.approx(THICK / 2 + body_len), (
+        "the shaft must leave the motor's far end, not the bolted end"
+    )
+    assert end > start, "it must run away from the plate"
+    assert min(start, end) > THICK / 2, "it must never enter the plate"
+
+
+def test_the_two_faces_put_the_shaft_in_genuinely_different_places():
+    base = get_mount("nema17")
+    front = _shaft_span(component_kcl(base, THICK, FACE_FRONT))
+    back = _shaft_span(component_kcl(base, THICK, FACE_BACK))
+    assert front != back
+    # Not a mirror: front spans the plate, back sits entirely beyond the motor.
+    assert front[1] < 0 < back[0]
 
 
 def test_unknown_face_is_rejected(tmp_path):

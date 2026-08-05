@@ -39,9 +39,29 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-# Which side of the plate the component body sits on.
-FACE_FRONT = "front"  # body on +Z, shaft passes down through the plate
-FACE_BACK = "back"  # body on -Z, shaft passes up through the plate
+# WHICH FACE OF THE MOTOR is bolted to the plate.
+#
+# This used to mean "which side of the plate the body sits on", which was not
+# a physical choice at all: putting the motor below the plate instead of above
+# it is the same assembly viewed from the other side. Switching it mirrored the
+# picture and changed nothing about the build.
+#
+# What actually differs is which end of the motor the plate is fastened to, and
+# it changes where the shaft goes:
+#
+#   FRONT -- the plate bolts to the shaft-end faceplate. The shaft passes
+#            THROUGH the plate, so the motor and whatever the shaft drives end
+#            up on opposite sides of it. This is the normal NEMA mounting, and
+#            the reason a NEMA plate has a pilot bore at all.
+#
+#   BACK  -- the plate bolts to the motor's REAR face. The shaft points away
+#            from the plate and never enters it; the motor body sits between
+#            the plate and the load. The plate needs no shaft clearance, and
+#            the load is cantilevered off it by the whole body length.
+#
+# The body is on the same side of the plate either way -- it is bolted to it.
+FACE_FRONT = "front"  # plate on the shaft end; shaft passes through the plate
+FACE_BACK = "back"  # plate on the rear face; shaft points away from the plate
 MOUNTING_FACES = (FACE_FRONT, FACE_BACK)
 
 # Gap opened between parts for the preview render. A 1mm plate under a 40mm
@@ -197,7 +217,13 @@ def _box(
 
 
 def _sign(face: str) -> float:
-    """+1 puts the body above the plate, -1 below."""
+    """Kept only for the bearing and board branches, where "which side" is
+    still the meaningful question -- neither has a shaft end to bolt by.
+
+    For motors it is NOT the right abstraction and is deliberately not used:
+    putting the body below the plate rather than above it is the same build
+    seen from underneath. See the FACE_FRONT / FACE_BACK notes at the top.
+    """
     return 1.0 if face == FACE_FRONT else -1.0
 
 
@@ -289,42 +315,61 @@ def component_kcl(mount, thickness_mm: float, face: str, explode_mm: float = 0.0
     screen that answers to no data.
     """
     half_t = thickness_mm / 2
-    s = _sign(face)
+    front = face == FACE_FRONT
     body_len = mount.body_cg_offset_mm * 2
 
     if mount.kind == "motor" and body_len > 0:
         parts = [
-            f"// Reference geometry for a {mount.name}.",
+            f"// Reference geometry for a {mount.name}, "
+            f"{'front' if front else 'rear'}-face mounted.",
             "// Drawn from catalogue dimensions for context only -- this is not",
             "// the designed part and is not verified against anything.",
             HEADER,
         ]
-        # In the stub-shaft topology the motor genuinely does stand off the
-        # plate, on spacers, with the coupling in the gap. That is real
-        # geometry, not the explode offset -- so it is added before it and
-        # survives into the to-scale assembly.
+        # The motor sits on the plate whichever face is bolted -- it is
+        # fastened to it. In the stub-shaft topology it stands off on spacers,
+        # with the coupling in the gap. That is real geometry rather than the
+        # explode offset, so it survives into the to-scale assembly.
         standoff = mount.motor_standoff_mm
-        body_base = s * (half_t + standoff + explode_mm)
+        body_base = half_t + standoff + explode_mm
+        body_far = body_base + body_len
 
         parts.append(
             _box("motorBody", body_base, mount.plate_width_mm,
-                 mount.plate_height_mm, s * body_len, COLOUR_COMPONENT,
+                 mount.plate_height_mm, body_len, COLOUR_COMPONENT,
                  holes=mount.hole_positions,
                  hole_dia=mount.bolt_hole_dia_mm,
                  hole_depth=MOTOR_TAP_DEPTH_MM)
         )
+
+        # The pilot boss and the shaft both live on the motor's FRONT face.
+        # Which end of the assembly that is depends on which face got bolted.
+        shaft_face = body_base if front else body_far
+        boss_dir = -1.0 if front else 1.0
+
         if mount.center_hole_dia_mm > 0 and standoff == 0:
-            # The pilot boss only registers in something it is touching.
+            # The boss only registers in something it is touching, so a
+            # rear-mounted motor's boss stands proud into open air.
             parts.append(
-                _disc("pilotBoss", body_base, mount.center_hole_dia_mm,
-                      -s * PILOT_BOSS_HEIGHT_MM, COLOUR_COMPONENT)
+                _disc("pilotBoss", shaft_face, mount.center_hole_dia_mm,
+                      boss_dir * PILOT_BOSS_HEIGHT_MM, COLOUR_COMPONENT)
             )
+
         if mount.shaft_dia_mm > 0:
-            if standoff > 0:
+            if not front:
+                # Rear-mounted: the shaft leaves the far end of the motor and
+                # runs AWAY from the plate. It never enters it, which is the
+                # whole difference between the two mountings -- and why the
+                # plate needs no shaft clearance in this configuration.
+                parts.append(
+                    _disc("shaft", shaft_face, mount.shaft_dia_mm,
+                          SHAFT_STUB_MM, COLOUR_SHAFT)
+                )
+            elif standoff > 0:
                 # Motor shaft reaches down into the coupling, and stops there.
                 parts.append(
-                    _disc("shaft", body_base, mount.shaft_dia_mm,
-                          -s * (explode_mm + standoff * 0.8), COLOUR_SHAFT)
+                    _disc("shaft", shaft_face, mount.shaft_dia_mm,
+                          -(explode_mm + standoff * 0.8), COLOUR_SHAFT)
                 )
             else:
                 # Straight through the plate and out the far side. The explode
@@ -332,14 +377,18 @@ def component_kcl(mount, thickness_mm: float, face: str, explode_mm: float = 0.0
                 # shaft stops in mid-air short of the hole it passes through --
                 # which is what the exploded preview used to show.
                 parts.append(
-                    _disc("shaft", body_base, mount.shaft_dia_mm,
-                          -s * (thickness_mm + SHAFT_STUB_MM + explode_mm),
+                    _disc("shaft", shaft_face, mount.shaft_dia_mm,
+                          -(thickness_mm + SHAFT_STUB_MM + explode_mm),
                           COLOUR_SHAFT)
                 )
+
         if standoff > 0:
-            parts += _standoffs(mount, s, body_base)
-            if mount.bearing_bore_mm > 0:
-                parts += _coupling_and_stub(mount, thickness_mm, s, explode_mm)
+            parts += _standoffs(mount, 1.0, body_base)
+            # A coupling only exists if the motor's shaft points at the plate.
+            # Rear-mounted it points the other way, and drawing one would show
+            # a drive train that cannot be built.
+            if front and mount.bearing_bore_mm > 0:
+                parts += _coupling_and_stub(mount, thickness_mm, 1.0, explode_mm)
         return "\n".join(parts)
 
     if mount.kind == "bearing":
@@ -348,7 +397,8 @@ def component_kcl(mount, thickness_mm: float, face: str, explode_mm: float = 0.0
             "// Drawn for context only -- this is not the designed part.",
             HEADER,
         ]
-        # Shaft passes through the block completely
+        # Shaft passes through the block completely.
+        s = _sign(face)
         shaft_start = s * half_t + s * 20.0
         parts.append(
             _disc("shaft", shaft_start, mount.shaft_dia_mm,
@@ -363,8 +413,8 @@ def component_kcl(mount, thickness_mm: float, face: str, explode_mm: float = 0.0
             "// margin; the real PCB outline is not in the catalogue, so this is",
             "// indicative only.",
             HEADER,
-            _box("board", s * half_t, mount.plate_width_mm + 20,
-                 mount.plate_height_mm + 6, s * BOARD_PCB_THICKNESS_MM,
+            _box("board", _sign(face) * half_t, mount.plate_width_mm + 20,
+                 mount.plate_height_mm + 6, _sign(face) * BOARD_PCB_THICKNESS_MM,
                  COLOUR_COMPONENT),
         ])
 

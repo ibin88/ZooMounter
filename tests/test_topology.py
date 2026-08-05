@@ -306,3 +306,32 @@ def test_the_direct_topology_has_no_standoffs():
     """The motor bolts flat to the plate there, so spacers would be fiction."""
     direct, _ = _spec(TOPOLOGY_DIRECT)
     assert "standoff" not in assembly.component_kcl(direct, 9.0, FACE_FRONT)
+
+
+# ---------------------------------------------------------------------------
+# The mounting face is a physical choice, not a viewpoint.
+# ---------------------------------------------------------------------------
+
+
+def test_rear_mounting_warns_that_the_holes_may_not_exist():
+    """The NEMA standard puts the bolt pattern, boss and shaft all on the
+    FRONT face. Rear tapped holes are a per-model extra."""
+    checks = mechanics.face_checks(N17, "back")
+    assert any(c.level == "WARN" and "rear tapped holes" in c.message for c in checks)
+    assert all(c.code == mechanics.REAR_FACE_MOUNTING for c in checks)
+
+
+def test_rear_mounting_notes_the_centre_bore_registers_nothing():
+    checks = mechanics.face_checks(N17, "back")
+    assert any("Nothing registers in it" in c.message for c in checks)
+
+
+def test_front_mounting_needs_no_such_warning():
+    assert mechanics.face_checks(N17, "front") == []
+
+
+def test_face_checks_name_a_declared_rule():
+    from zoomounter import rules
+
+    for c in mechanics.face_checks(N17, "back"):
+        assert rules.get(c.code).statement

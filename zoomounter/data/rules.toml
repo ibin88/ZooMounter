@@ -238,6 +238,15 @@ status     = "vendor-datasheet"
 remedy     = "Use standoffs on the motor's bolt pattern and a flexible coupling. A rigid coupling reintroduces the overconstraint this topology exists to avoid."
 
 [[rule]]
+id         = "rear_face_mounting"
+statement  = "Bolting a motor by its rear face points the shaft away from the plate, so the plate needs no shaft clearance, the load is cantilevered off it by the whole body length, and the motor must actually have rear mounting holes -- many do not."
+applies_to = { kind = "motor" }
+source     = "NEMA faceplate convention: the standard bolt pattern, pilot boss and shaft are all on the FRONT face. Rear tapped holes are a per-model extra, present on many NEMA 23 frames and absent on most NEMA 17s."
+severity   = "warn"
+status     = "standard"
+remedy     = "Check your specific motor's datasheet for rear tapped holes before committing to this. If it has none, mount by the front face instead."
+
+[[rule]]
 id         = "topology_direct_overconstrained"
 statement  = "A bearing seated in the plate and running on the motor's own shaft is overconstrained against the motor's front bearing, transmits almost no thrust because a plain stepper shaft has no shoulder, and often leaves no material gripping the outer ring once the pilot boss is cleared."
 applies_to = { kind = "motor" }
