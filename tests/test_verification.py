@@ -17,7 +17,12 @@ from pathlib import Path
 import pytest
 
 from zoomounter.materials import get_material
-from zoomounter.mechanics import required_thickness
+from zoomounter.mechanics import (
+    BEARING_SEAT_GOVERNS,
+    PROCESS_FLOOR_GOVERNS,
+    THERMAL_UNMODELLED,
+    required_thickness,
+)
 from zoomounter.mount_specs import get_mount, square_bolt_pattern
 from zoomounter.step_inspect import match_holes, parse_step
 from zoomounter.verify import check_bounding_box, check_hole_positions, expected_holes
@@ -224,60 +229,64 @@ def test_square_bolt_pattern_helper():
     assert all(abs(abs(x) - 15.5) < 1e-6 and abs(abs(y) - 15.5) < 1e-6 for x, y in holes)
 
 
-# ---- sizing calcs -------------------------------------------------------
+# ---- thickness ----------------------------------------------------------
+#
+# The tests that used to sit here checked a structural layer that has been
+# removed: bending stress, L/300 tip deflection, screw-head punching shear and
+# fastener tension. They are gone rather than ported, because they asserted
+# behaviour the tool deliberately no longer has.
+#
+# The reason for the removal is that the layer never governed. For every part
+# in scope the structural requirement lands below the minimum wall the process
+# can produce, so a thickness quoted to two decimals from a named beam formula
+# was the process floor wearing a calculation's clothes. Two of the deleted
+# tests are worth naming, because they encoded the confusion directly:
+# `test_radial_load_is_thickness_governed` asserted more load means more
+# material, which is false here; and `..._scales_with_safety_factor` asserted
+# the safety factor moves the thickness, which it now does not -- it applies
+# to bearing selection, where there is a rating to divide.
+#
+# What replaced them asserts the inversion instead: thickness is a
+# manufacturing answer, and the load question is answered somewhere else.
 
 
-def test_radial_load_is_thickness_governed():
-    """A side load bends the plate, so more load must mean more material."""
+def test_thickness_does_not_depend_on_the_load():
+    """The inversion, asserted directly. The plate is sized by what the
+    process can make and what the bearing needs to seat in -- neither of which
+    knows anything about the load."""
     mount, material = get_mount("nema17"), get_material("aluminum_6061")
-    light = required_thickness(50, mount, material, 2.0, load_type="radial")
-    heavy = required_thickness(500, mount, material, 2.0, load_type="radial")
-    assert heavy.required_thickness_mm > light.required_thickness_mm
-
-
-def test_self_weight_included_for_radial_motor_mounts():
-    mount, material = get_mount("nema17"), get_material("aluminum_6061")
-    result = required_thickness(10, mount, material, 2.0, load_type="radial")
-    assert result.self_weight_n > 0
-    # ensure self_weight moment is included
-    cg_arm = getattr(mount, 'body_cg_offset_mm', 0)
-    expected_moment = 10 * result.lever_arm_mm + result.self_weight_n * cg_arm
-    assert result.moment_n_mm == pytest.approx(expected_moment)
-
-
-def test_axial_self_weight_not_added():
-    """Gravity acts perpendicular to an axial thrust, so it must not be
-    summed into it."""
-    mount, material = get_mount("nema17"), get_material("aluminum_6061")
-    result = required_thickness(100, mount, material, 2.0, load_type="axial")
-    assert result.self_weight_n == 0
-    assert result.effective_load_n == 100
-
-
-def test_axial_warns_when_fasteners_are_the_real_limit():
-    """A load past the screws' tensile capacity must say so, rather than
-    quietly returning a thin plate that reads as an all-clear."""
-    mount, material = get_mount("nema17"), get_material("aluminum_6061")
-    result = required_thickness(20000, mount, material, 2.0, load_type="axial")
-    assert any(n.level in ("WARN", "LOUD WARN") for n in result.notes)
-
-
-def test_axial_always_flags_what_it_does_not_check():
-    mount, material = get_mount("nema17"), get_material("aluminum_6061")
-    result = required_thickness(100, mount, material, 2.0, load_type="axial")
-    assert any("NOT CHECKED" in str(n) for n in result.notes)
+    assert (
+        required_thickness(mount, material, plate_load_n=0).required_thickness_mm
+        == required_thickness(mount, material, plate_load_n=5000).required_thickness_mm
+    )
 
 
 def test_governing_limit_is_reported_honestly():
-    """At a trivial load the process floor decides, and the result should
-    admit that rather than implying the engineering calc drove it."""
-    mount, material = get_mount("nema17"), get_material("pla")
-    result = required_thickness(1, mount, material, 2.0, load_type="axial")
+    """The result should say the process floor decided, rather than implying
+    an engineering calc drove it."""
+    result = required_thickness(get_mount("nema17"), get_material("pla"))
     assert "process minimum" in result.governing_limit
+    assert any(n.code == PROCESS_FLOOR_GOVERNS for n in result.notes)
 
 
-def test_thicker_material_requirement_scales_with_safety_factor():
-    mount, material = get_mount("nema23"), get_material("mild_steel")
-    low = required_thickness(400, mount, material, 1.5, load_type="radial")
-    high = required_thickness(400, mount, material, 4.0, load_type="radial")
-    assert high.required_thickness_mm > low.required_thickness_mm
+def test_a_bearing_seat_can_raise_the_thickness():
+    """A plate too thin to hold its bearing is not a lighter plate, it is a
+    part that cannot exist. The seat depth is a floor alongside the process
+    minimum, not a warning issued after the number is fixed."""
+    from zoomounter.bearings import BY_DESIGNATION, bearing_block
+
+    seated = bearing_block(BY_DESIGNATION["51101"], "axial")
+    result = required_thickness(seated, get_material("aluminum_6061"))
+    assert result.governing_limit.startswith("bearing seat")
+    assert result.required_thickness_mm > result.min_wall_mm
+    assert any(n.code == BEARING_SEAT_GOVERNS for n in result.notes)
+
+
+def test_printed_parts_are_warned_about_heat():
+    """A NEMA case runs at 70-80 C and PLA softens below that. The old code
+    computed an L/300 deflection limit that models none of this; stating the
+    limitation is more honest than approximating it with an unrelated rule."""
+    printed = required_thickness(get_mount("nema17"), get_material("pla"))
+    machined = required_thickness(get_mount("nema17"), get_material("aluminum_6061"))
+    assert any(n.code == THERMAL_UNMODELLED for n in printed.notes)
+    assert not any(n.code == THERMAL_UNMODELLED for n in machined.notes)

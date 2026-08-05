@@ -1,50 +1,63 @@
-"""Plate-thickness sizing for ZooMounter.
+"""What actually governs a mount, and what never did.
 
-Hand-calc-grade approximations for prototyping sanity checks. Not FEA, not a
-substitute for a real structural review on anything load-bearing. Every
-assumption below is stated so you can decide whether it matches your case.
+This module used to size a plate against bending stress, tip deflection and
+screw-head pull-through. All of that is gone. The reasoning is worth keeping,
+because deleting a calculation is a stronger claim than adding one.
 
-## Two load types, because a plate reacts them completely differently
+## Why the structural layer was removed
 
-**Radial** (default) -- an external load perpendicular to the bolt axis: a
-belt, pulley or gear pulling sideways on a motor shaft. The plate acts as a
-cantilever, so this is genuinely thickness-governed, and two limits are
-checked with the larger winning:
+**It never governed.** A NEMA 17's published radial limit is 28N. Run that
+through a cantilever bending calc on a 42mm plate in any real material and the
+answer lands below the minimum wall thickness the process can produce. The
+same is true for every part in scope. Four calculations -- bending, deflection,
+punching shear, fastener tension -- and on every in-scope case the process
+floor won. The module's own docstring already conceded the point for the axial
+path: "for axial thrust the plate is usually not the limiting element at all."
 
-- bending stress under yield / safety_factor
-- tip deflection under lever_arm / 300, a common stiffness rule of thumb for
-  machine-element brackets
+**It answered a question about the wrong object.** The motor's housing is a
+cast or extruded metal shell bolted to a flat plate. It is not the fragile
+part of the assembly and never was. What is fragile is the shaft, and more
+precisely the small bearings inside the motor that support it. Those have
+published limits an order of magnitude below anything the bracket cares about.
 
-The component's own weight is added to the external load (worst case: shaft
-horizontal, so gravity pulls sideways too), and the default lever arm comes
-from the component's typical body length rather than an arbitrary guess.
+**It made a wrong answer look rigorous.** A thickness quoted to two decimals,
+derived from a named beam formula, reads as an engineering result. When it is
+really the process floor wearing a beam calc's clothes, that presentation is
+the problem -- it is the same failure this project already documented twice,
+where a number that looked authoritative answered to nothing.
 
-**Axial** -- thrust along the bolt axis: a leadscrew pushing back into a
-motor. This is the interesting case, and an earlier version of this file got
-it wrong in a way worth documenting.
+The deflection limit deserves its own note. It was L/300, a generic bracket
+stiffness rule. For a printed bracket it does not model the real failure mode
+at all: a NEMA 23 case runs at 70-80 C and PLA creeps well below that, so a
+part that passes L/300 on day one can sag in service without the load ever
+changing. Computing around that is worse than stating it, so it is now stated
+as a limitation rather than approximated by an unrelated rule.
 
-That version modelled axial thrust as bearing stress crushing sideways
-through the bolt holes -- `F / (n_bolts * hole_dia * t)`. That's the formula
-for a clevis pin loaded transversely, and it simply isn't what happens here:
-thrust along the bolt axis doesn't push sideways on the hole walls at all.
-The number it produced was meaningless.
+`materials.py` stays. Minimum wall, density and material naming are all still
+needed. It simply no longer feeds a stress equation.
 
-What actually happens: thrust travels through the motor's internal bearing
-into its mounting flange, and from there into the fasteners. The plate's own
-realistic failure mode is the screw head **pulling through** the plate --
-punching shear on the cylindrical surface under the head. So:
+## What replaced it
 
-    tau_allow = 0.577 * yield / safety_factor      (von Mises shear yield)
-    shear area per bolt = pi * head_dia * t
-    t = F_per_bolt / (pi * head_dia * tau_allow)
+The entry point is now `shaft_support()`, which asks the question that has a
+real answer: **does this load exceed what the component's own shaft can take,
+and therefore does it need to bypass the motor into a bearing?**
 
-The honest headline, though, is that **for axial thrust the plate is usually
-not the limiting element at all.** The fasteners, the threads they engage in
-the motor's tapped holes, and the motor's own axial bearing rating all
-typically govern long before plate thickness does. So the axial path also
-runs a screw-tension check and reports what governs -- including naming the
-things ZooMounter cannot check, so a thin result reads as "the plate isn't
-your constraint here, go look at these" rather than as a false all-clear.
+Thickness demotes to a consequence, computed by `required_thickness()` from
+two floors: what the process can make, and what the bearing needs to seat in.
+Neither is a load calculation, and the result no longer pretends to be one.
+
+## Two loads, not one
+
+The old API took a single `load_n` and compared it against the component's
+SHAFT ratings, while the CLI prompted for it as "expected load on the mount".
+One variable carried two physical meanings, so bolting a camera to the plate
+reported a shaft overload that cannot physically happen. They are now separate:
+
+- `shaft_load_n` acts at the shaft, is checked against the component's
+  published rating, and is what a bearing can bypass.
+- `plate_load_n` is anything else fastened to the bracket. It never reaches
+  the shaft, is never compared to a shaft rating, and is reported as
+  explicitly unmodelled rather than silently folded into a check it fails.
 """
 
 import math
@@ -53,33 +66,48 @@ from dataclasses import dataclass, field
 from .materials import MIN_WALL_MM, Material
 from .mount_specs import MountSpec
 
-GRAVITY_M_S2 = 9.81
 LOAD_TYPES = ("radial", "axial")
 
-# von Mises: shear yield is ~0.577x tensile yield.
-SHEAR_YIELD_FACTOR = 0.577
+# Shaft-support verdicts.
+SHAFT_OK = "SHAFT_OK"
+SHAFT_UNKNOWN = "SHAFT_UNKNOWN"
+BEARING_RECOMMENDED = "BEARING_RECOMMENDED"
+BEARING_REQUIRED = "BEARING_REQUIRED"
 
-# A socket-head cap screw's head is roughly 1.8x its thread diameter (M3 ->
-# 5.5mm, M5 -> 8.5mm). The hole in the plate is a clearance hole, so thread
-# diameter is a little under hole diameter; using hole diameter here is
-# slightly conservative on head size, which is the safe direction.
-HEAD_DIA_PER_HOLE_DIA = 1.8
+# Utilisation above which a bearing is advised while not yet mandatory.
+#
+# PROVENANCE: this is a judgement call, not a datasheet figure, and it is
+# named rather than inlined so it reads as one. Published shaft ratings are
+# absolute maxima with no stated margin, quoted for a load case tidier than
+# any real machine -- belt tension varies with temperature and wear, and a
+# hard stop delivers a transient far above the nominal figure. Sitting at 85%
+# of an absolute maximum is not a passing grade. 0.70 is where the tool starts
+# saying so.
+BEARING_ADVISORY_UTILISATION = 0.70
 
-# Property-class 8.8 steel fastener, the common default for machine screws.
-# Proof stress ~580 MPa; used with the screw's tensile stress area.
-FASTENER_PROOF_STRESS_MPA = 580.0
+# Material left under a blind counterbore so the seat has a floor to press
+# against rather than opening into a through-hole.
+BEARING_SEAT_FLOOR_MM = 2.0
 
-# Nominal screw sizes and their ISO coarse-pitch tensile stress areas (mm^2),
-# used to estimate fastener capacity from the plate's clearance hole size.
-_TENSILE_STRESS_AREA_MM2 = {
-    2.0: 2.07,
-    2.5: 3.39,
-    3.0: 5.03,
-    4.0: 8.78,
-    5.0: 14.2,
-    6.0: 20.1,
-    8.0: 36.6,
-    10.0: 58.0,
+# Stable codes. Prefer these over matching on message text.
+SHAFT_LIMIT = "shaft_limit"
+SHAFT_LIMIT_UNKNOWN = "shaft_limit_unknown"
+PLATE_LOAD_UNMODELLED = "plate_load_unmodelled"
+BEARING_SEAT_GOVERNS = "bearing_seat_governs"
+PROCESS_FLOOR_GOVERNS = "process_floor_governs"
+THERMAL_UNMODELLED = "thermal_unmodelled"
+
+_BYPASS_REMEDY = {
+    "axial": (
+        "Add a thrust bearing so the load bypasses the motor "
+        "(screw -> bearing -> housing -> frame), and drive through a flexible "
+        "coupling that tolerates float."
+    ),
+    "radial": (
+        "Support the shaft in its own bearing and drive through a coupling, so "
+        "the side load reacts into the frame rather than the motor's front "
+        "bearing."
+    ),
 }
 
 
@@ -101,227 +129,208 @@ class Check:
 
 
 @dataclass
-class ThicknessResult:
+class ShaftDecision:
+    """Whether the component's own shaft can take the load, or needs help.
+
+    This is the tool's primary result. Everything else is downstream of it.
+    """
+
+    verdict: str
     load_type: str
-    self_weight_n: float
-    effective_load_n: float
-    lever_arm_mm: float  # 0 for axial (not applicable)
-    moment_n_mm: float  # 0 for axial
-    allowable_stress_mpa: float
-    thickness_from_stress_mm: float
-    thickness_from_deflection_mm: float  # 0 for axial (not a governing mode)
-    min_wall_mm: float
+    shaft_load_n: float
+    offset_mm: float  # where the load acts, from the mounting face
+    limit_n: float | None  # published rating, None if not on file
+    limit_at_mm: float | None  # distance that rating was measured at (radial)
+    applied_n_mm: float | None  # applied demand, as a moment for radial
+    limit_n_mm: float | None  # rated demand, same units as applied
+    utilisation: float | None  # applied / limit; None if not checkable
+    checks: list[Check] = field(default_factory=list)
+
+    @property
+    def needs_bearing(self) -> bool:
+        return self.verdict in (BEARING_REQUIRED, BEARING_RECOMMENDED)
+
+
+@dataclass
+class ThicknessResult:
+    """Plate thickness, which is now a manufacturing answer rather than a
+    structural one. Both candidates are floors, not load calculations."""
+
     required_thickness_mm: float
-    governing_limit: str  # which of the above actually decided the answer
-    notes: list[Check] = field(default_factory=list)  # caveats worth surfacing to the user
+    governing_limit: str
+    min_wall_mm: float
+    bearing_seat_min_mm: float  # 0 when no bearing is seated in this plate
+    plate_load_n: float
+    notes: list[Check] = field(default_factory=list)
 
 
-def _nominal_screw_dia(hole_dia_mm: float) -> float:
-    """Closest standard screw size at or below the clearance hole."""
-    candidates = [d for d in _TENSILE_STRESS_AREA_MM2 if d <= hole_dia_mm + 0.01]
-    return max(candidates) if candidates else min(_TENSILE_STRESS_AREA_MM2)
+def shaft_support(
+    mount: MountSpec,
+    shaft_load_n: float,
+    load_type: str = "radial",
+    offset_mm: float | None = None,
+) -> ShaftDecision:
+    """Compare a shaft load against the component's published rating.
 
+    ## Radial loads are compared as moments, not forces
 
-def _fastener_capacity_n(hole_dia_mm: float, bolt_count: int, safety_factor: float) -> tuple[float, float]:
-    """Allowable total axial load carried by the fastener group, and the
-    nominal screw size that assumes. Returns (capacity_N, screw_dia_mm)."""
-    screw_dia = _nominal_screw_dia(hole_dia_mm)
-    area = _TENSILE_STRESS_AREA_MM2[screw_dia]
-    per_screw = area * FASTENER_PROOF_STRESS_MPA / safety_factor
-    return per_screw * bolt_count, screw_dia
+    A published radial rating is quoted at a stated distance from the mounting
+    flange -- 28N at 20mm for a NEMA 17. That is not incidental. What the
+    rating protects is the motor's front bearing, and a side load's severity
+    there scales with how far out it acts, so the figure is really a moment
+    limit expressed as a force plus a distance.
 
+    Comparing a bare force against it is therefore wrong in both directions: a
+    load at 40mm is twice as damaging as the rating allows while appearing to
+    pass, and a load at 10mm is judged harshly for no reason. Both sides are
+    converted to a moment about the mounting face before being compared, which
+    is why `max_radial_at_mm` is mandatory in the catalogue.
 
-# Stable code for the check that compares an applied load against the
-# component's own published shaft rating.
-COMPONENT_LOAD_LIMIT = "component_load_limit"
-BEARING_SEAT_GOVERNS = "bearing_seat_governs"
+    Axial thrust needs no such treatment. It loads the shaft along its axis
+    regardless of where it originates, so the rating stands alone.
+    """
+    if shaft_load_n < 0:
+        raise ValueError("shaft_load_n must not be negative")
+    if load_type not in LOAD_TYPES:
+        raise ValueError(f"load_type must be one of {LOAD_TYPES}")
 
-# Material left under a blind counterbore so the seat has a floor to press
-# against rather than opening into a through-hole.
-BEARING_SEAT_FLOOR_MM = 2.0
+    offset = offset_mm if offset_mm is not None else mount.shaft_load_offset_mm
+    checks: list[Check] = []
 
-_LOAD_LIMIT_REMEDY = {
-    "axial": (
-        "Add a thrust bearing so the load bypasses the motor "
-        "(screw -> bearing -> housing -> frame), and use a flexible coupling "
-        "that tolerates float."
-    ),
-    "radial": (
-        "Support the shaft in its own bearing block and drive through a "
-        "coupling, so the side load reacts into the frame rather than the "
-        "motor's front bearing."
-    ),
-}
+    limit_n = mount.max_axial_n if load_type == "axial" else mount.max_radial_n
+    limit_at = None if load_type == "axial" else mount.max_radial_at_mm
 
-
-def _component_load_check(mount: MountSpec, load_n: float, direction: str) -> Check:
-    """Compare the applied load against the COMPONENT's own published shaft
-    limit, which is independent of how thick we make the plate.
-
-    The limit is read off the MountSpec rather than being a module constant:
-    the figure differs per frame size, and a shared constant applied across
-    every motor is what made the earlier 67N check wrong for NEMA 17."""
-    limit = mount.max_axial_n if direction == "axial" else mount.max_radial_n
-
-    if limit is None:
-        return Check(
-            level="WARN",
-            message=(
-                f"No published {direction} shaft-load limit is on file for "
-                f"{mount.name}, so this load has NOT been checked against the "
-                f"component itself -- only against the plate."
-            ),
-            remedy=(
-                f"Look up the {direction} load rating in your part's datasheet "
-                f"and confirm {load_n:.0f}N is within it."
-            ),
-            code=COMPONENT_LOAD_LIMIT,
+    if limit_n is None:
+        checks.append(
+            Check(
+                level="WARN",
+                message=(
+                    f"No published {load_type} shaft limit is on file for "
+                    f"{mount.name}, so {shaft_load_n:.0f}N has NOT been checked "
+                    f"against the component. Absence of a limit is not a pass."
+                ),
+                remedy=(
+                    f"Find the {load_type} rating in your part's datasheet and "
+                    f"confirm this load is within it. If the rating is radial, "
+                    f"note the distance it is quoted at -- it is a moment limit."
+                ),
+                code=SHAFT_LIMIT_UNKNOWN,
+            )
+        )
+        return ShaftDecision(
+            verdict=SHAFT_UNKNOWN,
+            load_type=load_type,
+            shaft_load_n=shaft_load_n,
+            offset_mm=offset,
+            limit_n=None,
+            limit_at_mm=None,
+            applied_n_mm=None,
+            limit_n_mm=None,
+            utilisation=None,
+            checks=checks,
         )
 
-    if load_n > limit:
-        return Check(
-            level="LOUD WARN",
-            message=(
-                f"{direction.capitalize()} load {load_n:.0f}N exceeds the published "
-                f"{direction} limit of {limit:.0f}N for {mount.name} "
-                f"({load_n / limit:.1f}x over). No plate thickness fixes this -- "
-                f"the limit is the component's own bearings, not the bracket."
-            ),
-            source=mount.load_limit_source,
-            remedy=_LOAD_LIMIT_REMEDY[direction],
-            code=COMPONENT_LOAD_LIMIT,
+    if load_type == "radial":
+        applied = shaft_load_n * offset
+        rated = limit_n * limit_at
+        applied_desc = f"{shaft_load_n:.0f}N at {offset:g}mm ({applied:.0f}N.mm)"
+        rated_desc = f"{limit_n:.0f}N at {limit_at:g}mm ({rated:.0f}N.mm)"
+    else:
+        applied = shaft_load_n
+        rated = limit_n
+        applied_desc = f"{shaft_load_n:.0f}N"
+        rated_desc = f"{limit_n:.0f}N"
+
+    utilisation = applied / rated if rated > 0 else math.inf
+
+    if utilisation > 1.0:
+        verdict = BEARING_REQUIRED
+        checks.append(
+            Check(
+                level="LOUD WARN",
+                message=(
+                    f"{load_type.capitalize()} shaft load {applied_desc} exceeds the "
+                    f"published limit {rated_desc} for {mount.name} "
+                    f"({utilisation:.1f}x over). No bracket thickness fixes this -- "
+                    f"the limit is the motor's own bearings, not the plate."
+                ),
+                source=mount.load_limit_source,
+                remedy=_BYPASS_REMEDY[load_type],
+                code=SHAFT_LIMIT,
+            )
+        )
+    elif utilisation > BEARING_ADVISORY_UTILISATION:
+        verdict = BEARING_RECOMMENDED
+        checks.append(
+            Check(
+                level="WARN",
+                message=(
+                    f"{load_type.capitalize()} shaft load {applied_desc} is at "
+                    f"{utilisation * 100:.0f}% of the published limit {rated_desc} "
+                    f"for {mount.name}. Published ratings are absolute maxima with "
+                    f"no margin, quoted for a steadier load than a real machine "
+                    f"delivers."
+                ),
+                source=mount.load_limit_source,
+                remedy=_BYPASS_REMEDY[load_type],
+                code=SHAFT_LIMIT,
+            )
+        )
+    else:
+        verdict = SHAFT_OK
+        checks.append(
+            Check(
+                level="PASS",
+                message=(
+                    f"{load_type.capitalize()} shaft load {applied_desc} is within "
+                    f"the published limit {rated_desc} for {mount.name} "
+                    f"({utilisation * 100:.0f}% utilised)."
+                ),
+                source=mount.load_limit_source,
+                code=SHAFT_LIMIT,
+            )
         )
 
-    return Check(
-        level="PASS",
-        message=(
-            f"{direction.capitalize()} load {load_n:.0f}N is within the published "
-            f"{direction} limit of {limit:.0f}N for {mount.name}."
-        ),
-        source=mount.load_limit_source,
-        code=COMPONENT_LOAD_LIMIT,
+    return ShaftDecision(
+        verdict=verdict,
+        load_type=load_type,
+        shaft_load_n=shaft_load_n,
+        offset_mm=offset,
+        limit_n=limit_n,
+        limit_at_mm=limit_at,
+        applied_n_mm=applied,
+        limit_n_mm=rated,
+        utilisation=utilisation,
+        checks=checks,
     )
 
 
 def required_thickness(
-    load_n: float,
     mount: MountSpec,
     material: Material,
-    safety_factor: float,
-    lever_arm_mm: float | None = None,
-    load_type: str = "radial",
+    plate_load_n: float = 0.0,
 ) -> ThicknessResult:
-    if load_n <= 0:
-        raise ValueError("load_n must be positive")
-    if safety_factor < 1:
-        raise ValueError("safety_factor must be >= 1")
-    if load_type not in LOAD_TYPES:
-        raise ValueError(f"load_type must be one of {LOAD_TYPES}")
+    """How thick the plate has to be, from manufacturing floors only.
 
-    allowable_stress_mpa = material.yield_mpa / safety_factor
-    min_wall = MIN_WALL_MM[material.process]
+    Two candidates, and the larger wins:
+
+    - the minimum wall the chosen process can actually produce
+    - the depth the bearing needs to seat in, when one is seated here
+
+    Neither is a load calculation, and that is the honest answer rather than a
+    reduced one -- see the module docstring for why the structural layer that
+    used to sit here was removed rather than kept as a sanity check.
+    """
     notes: list[Check] = []
+    min_wall = MIN_WALL_MM[material.process]
 
-    if load_type == "axial":
-        self_weight_n = 0.0  # gravity acts perpendicular to an axial thrust, not with it
-        effective_load_n = load_n
-        bolt_count = len(mount.hole_positions)
-
-        # Plate's own failure mode: screw head punching through.
-        head_dia = mount.bolt_hole_dia_mm * HEAD_DIA_PER_HOLE_DIA
-        tau_allow = SHEAR_YIELD_FACTOR * allowable_stress_mpa
-        load_per_bolt = effective_load_n / bolt_count
-        t_stress = load_per_bolt / (math.pi * head_dia * tau_allow)
-        t_deflection = 0.0
-        arm = 0.0
-        moment_n_mm = 0.0
-
-        # What actually governs is usually elsewhere -- say so explicitly.
-        fastener_capacity, screw_dia = _fastener_capacity_n(
-            mount.bolt_hole_dia_mm, bolt_count, safety_factor
-        )
-        notes.append(
-            Check(
-                level="INFO",
-                message=f"Plate thickness is sized against screw-head pull-through (punching shear on a ~{head_dia:.1f}mm head), which calls for {t_stress:.2f}mm here."
-            )
-        )
-        if effective_load_n > fastener_capacity:
-            notes.append(
-                Check(
-                    level="LOUD WARN",
-                    message=f"{effective_load_n:.0f}N exceeds the estimated capacity of {bolt_count}x M{screw_dia:g} class-8.8 screws in tension ({fastener_capacity:.0f}N at SF {safety_factor}).",
-                    remedy="The fasteners, not the plate, are your limiting element -- size them up or add bolts."
-                )
-            )
-        else:
-            notes.append(
-                Check(
-                    level="PASS",
-                    message=f"{bolt_count}x M{screw_dia:g} class-8.8 screws carry an estimated {fastener_capacity:.0f}N in tension at SF {safety_factor}, well above this load."
-                )
-            )
-        notes.append(
-            Check(
-                level="WARN",
-                message="NOT CHECKED for axial loads: thread engagement depth in the motor's tapped holes, and the motor's own axial bearing rating.",
-                remedy="For thrust applications one of those is usually the real limit -- a thin result here means the plate is not your constraint, not that the assembly is safe."
-            )
-        )
-        
-        notes.append(_component_load_check(mount, load_n, "axial"))
-    else:
-        self_weight_n = mount.typical_mass_kg * GRAVITY_M_S2
-        effective_load_n = load_n + self_weight_n
-
-        if lever_arm_mm is not None:
-            arm = lever_arm_mm
-        elif getattr(mount, 'shaft_load_offset_mm', 0) > 0:
-            arm = mount.shaft_load_offset_mm
-        else:
-            arm = mount.plate_width_mm / 2
-
-        cg_arm = getattr(mount, 'body_cg_offset_mm', 0)
-        
-        # Worst-case moment magnitude: external load and component weight moment add together
-        moment_n_mm = (load_n * arm) + (self_weight_n * cg_arm)
-        
-        # For deflection calc, keep the simple cubic formula by finding an effective load at the shaft end
-        effective_load_n = moment_n_mm / arm if arm > 0 else load_n + self_weight_n
-
-        # Rectangular section, stress-limited: sigma = 6M / (w*t^2)
-        t_stress = (6 * moment_n_mm / (mount.plate_width_mm * allowable_stress_mpa)) ** 0.5
-
-        # Rectangular section, deflection-limited to arm/300:
-        # delta = F*L^3 / (3*E*I), I = w*t^3/12
-        e_mpa = material.youngs_modulus_gpa * 1000  # GPa -> MPa (N/mm^2)
-        max_deflection_mm = arm / 300
-        t_deflection_cubed = (effective_load_n * arm**3 * 12) / (
-            3 * e_mpa * mount.plate_width_mm * max_deflection_mm
-        )
-        t_deflection = t_deflection_cubed ** (1 / 3)
-
-        if self_weight_n > 0:
-            notes.append(
-                Check(
-                    level="INFO",
-                    message=f"Includes {self_weight_n:.2f}N of component self-weight (worst case: shaft mounted horizontal, so gravity acts as a side load too)."
-                )
-            )
-
-        notes.append(_component_load_check(mount, load_n, "radial"))
-
-    candidates = {
-        "bending stress" if load_type == "radial" else "screw-head pull-through": t_stress,
-        "deflection limit (arm/300)": t_deflection,
-        f"process minimum wall ({material.process})": min_wall,
-    }
+    candidates = {f"process minimum wall ({material.process})": min_wall}
 
     # A plate that cannot hold the bearing is not a lighter plate, it is a
-    # different part. Sizing to the structural answer and then cutting a 9mm
-    # counterbore into a 1mm plate produces geometry that cannot exist, so
-    # the seat depth belongs here alongside the process floor rather than as
+    # different part. Cutting a 9mm counterbore into a 1mm plate produces
+    # geometry that cannot exist, so the seat depth belongs here rather than as
     # a warning issued after the number is already fixed.
+    seat_min = 0.0
     if mount.bearing_width_mm > 0:
         if mount.bearing_seat_depth_mm > 0:
             seat_min = mount.bearing_seat_depth_mm + BEARING_SEAT_FLOOR_MM
@@ -330,6 +339,7 @@ def required_thickness(
             seat_min = mount.bearing_width_mm
             label = f"bearing seat ({mount.bearing_designation} outer-ring width)"
         candidates[label] = seat_min
+
     governing_limit = max(candidates, key=lambda k: candidates[k])
     required = candidates[governing_limit]
 
@@ -338,34 +348,69 @@ def required_thickness(
             Check(
                 level="INFO",
                 message=(
-                    f"Plate thickness is set by the bearing, not by the load: "
-                    f"the {mount.bearing_designation} needs {required:.2f}mm of plate to "
-                    f"seat in. The structural requirement here was "
-                    f"{max(t_stress, t_deflection, min_wall):.2f}mm."
+                    f"Thickness is set by the bearing: the "
+                    f"{mount.bearing_designation} needs {required:.2f}mm of plate to "
+                    f"seat in, against a {min_wall:.2f}mm process floor."
                 ),
                 code=BEARING_SEAT_GOVERNS,
             )
         )
-
-    if governing_limit.startswith("process minimum"):
+    else:
         notes.append(
             Check(
                 level="INFO",
-                message="The engineering calcs came out below the minimum manufacturable wall thickness, so the process floor sets the answer -- this part is not structurally limited at this load."
+                message=(
+                    f"Thickness is set by what {material.process} can produce "
+                    f"({min_wall:.2f}mm), not by the load. This part is not "
+                    f"structurally limited at this scale."
+                ),
+                code=PROCESS_FLOOR_GOVERNS,
+            )
+        )
+
+    if plate_load_n > 0:
+        notes.append(
+            Check(
+                level="WARN",
+                message=(
+                    f"{plate_load_n:.0f}N is fastened to the bracket rather than "
+                    f"applied at the shaft, so it is NOT checked against the "
+                    f"component's shaft rating -- that rating protects the motor's "
+                    f"bearings, which this load never reaches. It is also not "
+                    f"modelled structurally."
+                ),
+                remedy=(
+                    "For a bracket load this size, check the plate and its "
+                    "fasteners yourself. ZooMounter sizes for manufacturability "
+                    "and bearing fit, not for arbitrary bracket loads."
+                ),
+                code=PLATE_LOAD_UNMODELLED,
+            )
+        )
+
+    if material.process == "3d_print":
+        notes.append(
+            Check(
+                level="WARN",
+                message=(
+                    "Thermal creep is not modelled. A NEMA case runs at 70-80 C and "
+                    "PLA softens well below that, so a printed bracket bolted "
+                    "directly to a hot motor can sag in service at a load it held "
+                    "when new."
+                ),
+                remedy=(
+                    "Print in PETG or ABS, add a thermal break or standoffs "
+                    "between motor and bracket, or machine the part in metal."
+                ),
+                code=THERMAL_UNMODELLED,
             )
         )
 
     return ThicknessResult(
-        load_type=load_type,
-        self_weight_n=self_weight_n,
-        effective_load_n=effective_load_n,
-        lever_arm_mm=arm,
-        moment_n_mm=moment_n_mm,
-        allowable_stress_mpa=allowable_stress_mpa,
-        thickness_from_stress_mm=t_stress,
-        thickness_from_deflection_mm=t_deflection,
-        min_wall_mm=min_wall,
         required_thickness_mm=required,
         governing_limit=governing_limit,
+        min_wall_mm=min_wall,
+        bearing_seat_min_mm=seat_min,
+        plate_load_n=plate_load_n,
         notes=notes,
     )

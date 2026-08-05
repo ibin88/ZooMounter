@@ -101,12 +101,49 @@ def list_options() -> dict[str, Any]:
     }
 
 
+def _shaft_payload(decision) -> dict[str, Any]:
+    """Serialise the shaft decision.
+
+    This is the primary result, so it is a top-level object rather than a note
+    buried in a thickness breakdown. The utilisation and both sides of the
+    comparison are included: a caller that only sees a verdict cannot tell 101%
+    from 12x, and those warrant very different advice.
+    """
+    if decision is None:
+        return {
+            "verdict": "NOT_APPLICABLE",
+            "why": (
+                "This part is a bearing housing. It carries the shaft load by "
+                "design, so there is no motor shaft rating to check against."
+            ),
+        }
+    payload = {
+        "verdict": decision.verdict,
+        "load_type": decision.load_type,
+        "shaft_load_n": decision.shaft_load_n,
+        "published_limit_n": decision.limit_n,
+        "checks": decision.checks,
+    }
+    if decision.utilisation is not None:
+        payload["utilisation_fraction"] = round(decision.utilisation, 3)
+    if decision.load_type == "radial" and decision.limit_n is not None:
+        # Radial ratings are moment limits, so report the moments that were
+        # actually compared rather than the forces that were not.
+        payload["compared_as"] = "moment about the mounting face"
+        payload["applied_moment_n_mm"] = round(decision.applied_n_mm, 1)
+        payload["rated_moment_n_mm"] = round(decision.limit_n_mm, 1)
+        payload["load_offset_mm"] = decision.offset_mm
+        payload["rating_measured_at_mm"] = decision.limit_at_mm
+    return payload
+
+
 @mcp.tool()
 def size_mount(
     mount: str,
     material: str,
-    load_n: float,
+    shaft_load_n: float,
     load_type: str = "radial",
+    plate_load_n: float = 0.0,
     safety_factor: float = 2.0,
     overhang_mm: float | None = None,
     plate_width_mm: float | None = None,
@@ -119,13 +156,21 @@ def size_mount(
     yield_mpa: float | None = None,
     process: str | None = None,
 ) -> dict[str, Any]:
-    """Calculate the required plate thickness for a mount. Free and instant --
-    no API calls, no credits.
+    """Check whether a shaft load is within the component's rating, and size
+    the plate. Free and instant -- no API calls, no credits.
 
-    Use this whenever the question is "how thick does this need to be" rather
-    than "make me the part". Returns which limit governed, and any engineering
-    caveats worth passing on to the user (notably, for axial loads, what
-    ZooMounter does NOT check).
+    The primary answer is `shaft`: whether the load exceeds what the motor's
+    own bearings can take, and therefore whether a bearing is needed to bypass
+    them. No bracket thickness changes that answer.
+
+    `shaft_load_n` acts at the shaft (belt, gear, leadscrew) and is what gets
+    checked. `plate_load_n` is anything bolted to the bracket instead -- it
+    never reaches the shaft, so it is reported as unmodelled rather than
+    compared against a shaft rating it has nothing to do with.
+
+    For radial loads, pass `overhang_mm` if you know how far out the load acts.
+    It matters: a radial rating is a moment limit quoted at a stated distance,
+    so doubling the offset doubles the demand.
     """
     m, mat = _resolve(
         mount,
@@ -140,30 +185,34 @@ def size_mount(
         yield_mpa=yield_mpa,
         process=process,
     )
+    decision = (
+        mechanics.shaft_support(
+            mount=m,
+            shaft_load_n=shaft_load_n,
+            load_type=load_type,
+            offset_mm=overhang_mm,
+        )
+        if m.kind == "motor"
+        else None
+    )
     t = mechanics.required_thickness(
-        load_n=load_n,
-        mount=m,
-        material=mat,
-        safety_factor=safety_factor,
-        lever_arm_mm=overhang_mm,
-        load_type=load_type,
+        mount=m, material=mat, plate_load_n=plate_load_n
     )
     return {
         "mount": m.name,
         "material": mat.name,
-        "load_type": t.load_type,
-        "external_load_n": load_n,
-        "component_self_weight_n": round(t.self_weight_n, 2),
-        "effective_load_n": round(t.effective_load_n, 2),
-        "lever_arm_mm": round(t.lever_arm_mm, 2),
-        "required_thickness_mm": round(t.required_thickness_mm, 2),
-        "governed_by": t.governing_limit,
-        "breakdown_mm": {
-            "from_stress": round(t.thickness_from_stress_mm, 3),
-            "from_deflection": round(t.thickness_from_deflection_mm, 3),
-            "process_minimum_wall": t.min_wall_mm,
+        "shaft": _shaft_payload(decision),
+        "thickness": {
+            "required_thickness_mm": round(t.required_thickness_mm, 2),
+            "set_by": t.governing_limit,
+            "process_minimum_wall_mm": t.min_wall_mm,
+            "bearing_seat_minimum_mm": round(t.bearing_seat_min_mm, 2),
+            "note": (
+                "Thickness here is a manufacturing floor, not a structural "
+                "result. ZooMounter does not size this plate against a load."
+            ),
+            "notes": t.notes,
         },
-        "engineering_notes": t.notes,
     }
 
 
@@ -171,10 +220,7 @@ def size_mount(
 def build_prompt(
     mount: str,
     material: str,
-    load_n: float,
-    load_type: str = "radial",
-    safety_factor: float = 2.0,
-    overhang_mm: float | None = None,
+    plate_load_n: float = 0.0,
 ) -> dict[str, Any]:
     """Produce the fully-constrained text-to-CAD prompt for this spec, without
     generating anything. Free and instant.
@@ -183,20 +229,19 @@ def build_prompt(
     which is what makes the geometry come back exact rather than approximate.
     Paste it into Zoo Design Studio's chat, or feed it to the Agent API
     yourself.
+
+    Takes no shaft load, because the prompt does not depend on one: thickness
+    comes from the process floor and the bearing seat. Use `size_mount` to
+    check whether the shaft can take your load -- that is a separate question
+    from what geometry to build, and this tool no longer implies otherwise by
+    accepting a load it would not use.
     """
     m, mat = _resolve(mount, material)
-    t = mechanics.required_thickness(
-        load_n=load_n,
-        mount=m,
-        material=mat,
-        safety_factor=safety_factor,
-        lever_arm_mm=overhang_mm,
-        load_type=load_type,
-    )
+    t = mechanics.required_thickness(mount=m, material=mat, plate_load_n=plate_load_n)
     return {
         "prompt": generate.build_prompt(m, mat, t.required_thickness_mm),
         "required_thickness_mm": round(t.required_thickness_mm, 2),
-        "governed_by": t.governing_limit,
+        "set_by": t.governing_limit,
     }
 
 
@@ -290,8 +335,9 @@ def verify_step_file(
 def generate_mount(
     mount: str,
     material: str,
-    load_n: float,
+    shaft_load_n: float,
     load_type: str = "radial",
+    plate_load_n: float = 0.0,
     safety_factor: float = 2.0,
     overhang_mm: float | None = None,
     output_base: str = "output",
@@ -331,13 +377,18 @@ def generate_mount(
         yield_mpa=yield_mpa,
         process=process,
     )
+    decision = (
+        mechanics.shaft_support(
+            mount=m,
+            shaft_load_n=shaft_load_n,
+            load_type=load_type,
+            offset_mm=overhang_mm,
+        )
+        if m.kind == "motor"
+        else None
+    )
     t = mechanics.required_thickness(
-        load_n=load_n,
-        mount=m,
-        material=mat,
-        safety_factor=safety_factor,
-        lever_arm_mm=overhang_mm,
-        load_type=load_type,
+        mount=m, material=mat, plate_load_n=plate_load_n
     )
 
     out_dir = default_output_dir(mount, material, base=output_base)
@@ -352,8 +403,9 @@ def generate_mount(
     payload: dict[str, Any] = {
         "project_dir": str(out_dir),
         "kcl_file": str(kcl_path),
+        "shaft": _shaft_payload(decision),
         "required_thickness_mm": round(t.required_thickness_mm, 2),
-        "governed_by": t.governing_limit,
+        "set_by": t.governing_limit,
         "engineering_notes": t.notes,
         "open_in_design_studio": f"zoo app {out_dir}",
     }
@@ -373,7 +425,10 @@ def generate_mount(
         return payload
 
     report_path = out_dir / "inspection_report.md"
-    write_report(report_path, m.name, mat.name, load_n, safety_factor, t, result)
+    write_report(
+        report_path, m.name, mat.name, shaft_load_n, safety_factor, t, result,
+        decision=decision,
+    )
 
     payload.update(
         {

@@ -42,20 +42,44 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--mount", choices=[*MOUNTS.keys(), "bearing", "custom"], help="Mount type. 'bearing' generates a bearing block sized around a bearing chosen from the load case.")
     p.add_argument("--material", choices=[*MATERIALS.keys(), "custom"], help="Plate material")
-    p.add_argument("--load-n", type=float, help="Expected load on the mount, in newtons")
+    p.add_argument(
+        "--shaft-load-n",
+        type=float,
+        default=None,
+        help="Load acting at the SHAFT, in newtons -- belt tension, gear mesh, leadscrew thrust. "
+        "This is what gets checked against the component's published shaft rating, and what a "
+        "bearing can be added to bypass.",
+    )
+    p.add_argument(
+        "--plate-load-n",
+        type=float,
+        default=0.0,
+        help="Load fastened to the BRACKET rather than applied at the shaft -- a camera, a sensor, "
+        "a cable chain. Never reaches the shaft, so it is never compared to a shaft rating. "
+        "Reported as unmodelled. (default: 0)",
+    )
+    p.add_argument(
+        "--load-n",
+        type=float,
+        default=None,
+        help=argparse.SUPPRESS,  # deprecated alias for --shaft-load-n
+    )
     p.add_argument(
         "--load-type",
         choices=mechanics.LOAD_TYPES,
         default=None,
-        help="'radial' = side load (e.g. belt/pulley pulling sideways on the shaft), bending-governed. "
-        "'axial' = thrust load along the bolt axis (e.g. leadscrew pushing into the motor), bearing-stress-governed. (default: radial)",
+        help="Direction of the shaft load. 'radial' = side load (belt or pulley pulling sideways on "
+        "the shaft). 'axial' = thrust along the shaft axis (leadscrew pushing into the motor). "
+        "(default: radial)",
     )
-    p.add_argument("--safety-factor", type=float, default=2.0, help="Safety factor (default: 2.0)")
+    p.add_argument("--safety-factor", type=float, default=2.0, help="Safety factor, applied to bearing selection")
     p.add_argument(
         "--overhang-mm",
         type=float,
         default=None,
-        help="Lever arm for radial-load bending calc (default: the mount's typical body length if known, else half the plate width). Ignored for axial loads.",
+        help="How far from the mounting face the shaft load acts, in mm. This is not cosmetic: a "
+        "radial rating is a moment limit quoted at a stated distance, so doubling this doubles the "
+        "demand on the motor's front bearing. (default: the mount's shaft_load_offset_mm, 15mm)",
     )
     p.add_argument(
         "--output-dir",
@@ -137,9 +161,36 @@ def apply_defaults_noninteractive(args: argparse.Namespace) -> None:
     args.mount = args.mount or "nema17"
     args.material = args.material or "aluminum_6061"
     args.load_type = args.load_type or "radial"
-    if args.load_n is None:
-        args.load_n = 5.0
+    if args.shaft_load_n is None:
+        args.shaft_load_n = 5.0
     args.host_mount = args.host_mount or "none"
+
+
+def resolve_load_aliases(args: argparse.Namespace) -> None:
+    """Fold the deprecated --load-n into --shaft-load-n.
+
+    --load-n meant "expected load on the mount" and was then compared against
+    the component's SHAFT rating -- one flag carrying two physical meanings.
+    It maps to the shaft load because that is what it was actually measured
+    against, so old invocations keep their old behaviour. The warning is not
+    decoration: anyone who passed a bracket load to it was getting a shaft
+    check they did not ask for, and needs to move it to --plate-load-n.
+    """
+    if args.load_n is None:
+        return
+    if args.shaft_load_n is not None:
+        console.print(
+            "[red]error:[/red] pass either --shaft-load-n or the deprecated "
+            "--load-n, not both."
+        )
+        raise SystemExit(2)
+    args.shaft_load_n = args.load_n
+    console.print(
+        "[yellow]--load-n is deprecated.[/yellow] It has been read as "
+        "[bold]--shaft-load-n[/bold], which is what it was always compared "
+        "against. If this load is bolted to the bracket rather than acting at "
+        "the shaft, it belongs in --plate-load-n and is not a shaft check."
+    )
 
 
 def fill_in_interactively(args: argparse.Namespace) -> None:
@@ -202,12 +253,20 @@ def _prompt_for_missing(args: argparse.Namespace) -> None:
 
     if not args.load_type:
         args.load_type = Prompt.ask(
-            "Load type ('radial' = side load, 'axial' = thrust along bolt axis)",
+            "Shaft load direction ('radial' = side load, 'axial' = thrust along the shaft)",
             choices=list(mechanics.LOAD_TYPES),
             default="radial",
         )
-    if args.load_n is None:
-        args.load_n = FloatPrompt.ask("Expected load on the mount (N)", default=5.0)
+    if args.shaft_load_n is None:
+        # Asked as a SHAFT load, because that is what it is compared against.
+        # The old wording was "expected load on the mount", which invited a
+        # bracket load and then measured it against the motor's shaft rating.
+        console.print(
+            "[dim]The load at the shaft -- belt tension, gear mesh, or leadscrew "
+            "thrust. Anything bolted to the bracket instead goes in --plate-load-n."
+            "[/dim]"
+        )
+        args.shaft_load_n = FloatPrompt.ask("Shaft load (N)", default=5.0)
 
 
 def _write_assembly(output_dir, mount, base_mount, thickness_mm, mount_kcl,
@@ -317,33 +376,120 @@ def print_parametric_report(kcl_code: str, scheme: generate.ParameterScheme) -> 
     console.print()
 
 
-def print_spec_summary(mount, material, args, thickness: mechanics.ThicknessResult) -> None:
+def _bearing_that_would_carry_it(mount, args) -> mechanics.Check:
+    """Name the specific bearing that would take this load off the shaft.
+
+    Selection is driven by the load case, not by a flag. "Add a bearing" is
+    advice; "add an F8-16M, which carries 4990N static against the 240N you
+    need" is an answer, and the difference is most of the tool's value.
+    """
+    from . import bearings
+
+    if not mount.shaft_dia_mm:
+        return mechanics.Check(
+            level="INFO",
+            message=(
+                "No shaft diameter on file for this mount, so no specific bearing "
+                "can be suggested."
+            ),
+            code=mechanics.SHAFT_LIMIT,
+        )
+
+    sel = bearings.select_bearing(
+        load_type=args.load_type,
+        load_n=args.shaft_load_n,
+        shaft_dia_mm=mount.shaft_dia_mm,
+        safety_factor=args.safety_factor,
+    )
+    if sel.bearing is None:
+        return mechanics.Check(
+            level="WARN",
+            message=(
+                f"No bearing in the catalogue carries {args.shaft_load_n:.0f}N "
+                f"{args.load_type} on a {mount.shaft_dia_mm:g}mm shaft at SF "
+                f"{args.safety_factor:g}."
+            ),
+            remedy="Reduce the load, use a larger shaft, or add a bearing to the catalogue.",
+            code=mechanics.SHAFT_LIMIT,
+        )
+
+    return mechanics.Check(
+        level="INFO",
+        message=(
+            f"Bearing {sel.bearing.label} would carry this: rated "
+            f"{sel.bearing.static_c0_n:.0f}N static against "
+            f"{args.shaft_load_n * args.safety_factor:.0f}N required "
+            f"({args.shaft_load_n:.0f}N at SF {args.safety_factor:g})."
+        ),
+        source=sel.bearing.source,
+        remedy=(
+            f"Generate it with: --mount bearing --bearing {sel.bearing.designation} "
+            f"--shaft-dia-mm {mount.shaft_dia_mm:g}"
+        ),
+        code=mechanics.SHAFT_LIMIT,
+    )
+
+
+_LEVEL_STYLE = {
+    "LOUD WARN": "bold red",
+    "WARN": "yellow",
+    "PASS": "green",
+    "INFO": "dim",
+}
+
+_VERDICT_STYLE = {
+    mechanics.BEARING_REQUIRED: ("bold red", "BEARING REQUIRED"),
+    mechanics.BEARING_RECOMMENDED: ("yellow", "BEARING RECOMMENDED"),
+    mechanics.SHAFT_UNKNOWN: ("yellow", "NOT CHECKED"),
+    mechanics.SHAFT_OK: ("green", "SHAFT OK"),
+}
+
+
+def _print_checks(checks) -> None:
+    for note in checks:
+        console.print(f"  [{_LEVEL_STYLE.get(note.level, 'dim')}]- {note}[/]")
+
+
+def print_spec_summary(
+    mount, material, args, thickness: mechanics.ThicknessResult, decision=None
+) -> None:
+    # The shaft verdict goes first and on its own, because it is the result.
+    # Thickness used to hold this position while being set by the process
+    # floor in every real case -- a manufacturing constant presented as the
+    # engineering answer.
+    if decision is not None:
+        style, label = _VERDICT_STYLE[decision.verdict]
+        console.print(f"[{style}]{label}[/]  [dim]({decision.load_type} shaft load)[/dim]")
+        if decision.utilisation is not None:
+            if decision.load_type == "radial":
+                basis = (
+                    f"{decision.shaft_load_n:.0f} N at {decision.offset_mm:g} mm "
+                    f"vs {decision.limit_n:.0f} N at {decision.limit_at_mm:g} mm "
+                    f"(compared as moments)"
+                )
+            else:
+                basis = f"{decision.shaft_load_n:.0f} N vs {decision.limit_n:.0f} N rated"
+            console.print(
+                f"  [dim]{decision.utilisation * 100:.0f}% of published limit -- {basis}[/dim]"
+            )
+        _print_checks(decision.checks)
+        console.print()
+
     table = Table(title="Spec", show_header=False, box=None, padding=(0, 2, 0, 0))
     table.add_row("[bold]Mount[/bold]", mount.name)
     table.add_row("[bold]Material[/bold]", f"{material.name} ({material.process})")
-    table.add_row("[bold]Load type[/bold]", thickness.load_type)
-    table.add_row("[bold]External load[/bold]", f"{args.load_n} N")
-    if thickness.self_weight_n > 0:
+    table.add_row("[bold]Shaft load[/bold]", f"{args.shaft_load_n} N {args.load_type}")
+    if args.plate_load_n:
         table.add_row(
-            "[bold]+ Component self-weight[/bold]",
-            f"{thickness.self_weight_n:.2f} N ({mount.typical_mass_kg} kg) -> effective load {thickness.effective_load_n:.2f} N",
+            "[bold]Bracket load[/bold]",
+            f"{args.plate_load_n} N [dim](not a shaft load; unmodelled)[/dim]",
         )
-    table.add_row("[bold]Safety factor[/bold]", str(args.safety_factor))
     table.add_row(
-        "[bold]Calculated thickness[/bold]",
-        f"{thickness.required_thickness_mm:.2f} mm  [dim](governed by {thickness.governing_limit})[/dim]",
+        "[bold]Plate thickness[/bold]",
+        f"{thickness.required_thickness_mm:.2f} mm  [dim](set by {thickness.governing_limit})[/dim]",
     )
     console.print(table)
-    for note in thickness.notes:
-        if note.level == "LOUD WARN":
-            style = "bold red"
-        elif note.level == "WARN":
-            style = "yellow"
-        elif note.level == "PASS":
-            style = "green"
-        else:
-            style = "dim"
-        console.print(f"  [{style}]- {note}[/{style}]")
+    _print_checks(thickness.notes)
 
 
 def print_results_table(result: verify.VerificationResult) -> None:
@@ -364,30 +510,84 @@ def print_results_table(result: verify.VerificationResult) -> None:
         )
 
 
+def _notes_markdown(checks) -> str:
+    out = ""
+    for n in checks:
+        if n.level in ("WARN", "LOUD WARN"):
+            out += f"- **[{n.level}]** {n.message}\n"
+            if n.source:
+                out += f"  - *Source*: {n.source}\n"
+            if n.remedy:
+                out += f"  - *Remedy*: {n.remedy}\n"
+        else:
+            out += f"- {n.message}\n"
+    return out
+
+
+def _shaft_section(decision) -> str:
+    """The report's headline section.
+
+    This used to be a table of beam-calc intermediates -- lever arm, bending
+    moment, allowable stress, thickness from stress, thickness from deflection
+    -- none of which ever governed. What governs is whether the load exceeds
+    what the shaft is rated for, so that is what the report leads with now.
+    """
+    if decision is None:
+        return (
+            "## Shaft load\n\n"
+            "Not applicable: this part is a bearing housing, so it carries the "
+            "shaft load by design rather than passing it into a motor.\n"
+        )
+
+    _, label = _VERDICT_STYLE[decision.verdict]
+    body = f"## Shaft load: **{label}**\n\n"
+
+    if decision.utilisation is None:
+        body += (
+            f"{decision.shaft_load_n:.0f} N {decision.load_type} was not checked -- "
+            f"no published limit is on file for this component.\n\n"
+        )
+    elif decision.load_type == "radial":
+        body += (
+            f"A radial rating is a moment limit quoted at a distance from the "
+            f"mounting flange, so both sides are converted to a moment before "
+            f"being compared. Comparing the bare forces would be wrong in both "
+            f"directions.\n\n"
+            f"| | Force | Distance | Moment |\n|---|---|---|---|\n"
+            f"| Applied | {decision.shaft_load_n:.0f} N | {decision.offset_mm:g} mm | "
+            f"{decision.applied_n_mm:.0f} N·mm |\n"
+            f"| Published limit | {decision.limit_n:.0f} N | {decision.limit_at_mm:g} mm | "
+            f"{decision.limit_n_mm:.0f} N·mm |\n\n"
+            f"**Utilisation: {decision.utilisation * 100:.0f}%** of the published limit.\n\n"
+        )
+    else:
+        body += (
+            f"Axial thrust loads the shaft along its axis regardless of where it "
+            f"originates, so the rating is compared directly.\n\n"
+            f"- Applied: **{decision.shaft_load_n:.0f} N**\n"
+            f"- Published limit: **{decision.limit_n:.0f} N**\n"
+            f"- **Utilisation: {decision.utilisation * 100:.0f}%**\n\n"
+        )
+
+    body += _notes_markdown(decision.checks)
+    return body
+
+
 def write_report(
     path: Path,
     mount_name: str,
     material_name: str,
-    load_n: float,
+    shaft_load_n: float,
     safety_factor: float,
     thickness: mechanics.ThicknessResult,
     result: verify.VerificationResult,
     preview_path: Path | None = None,
+    decision=None,
 ) -> None:
     status = "PASS" if result.passed else "FAIL"
-    load_type_note = (
-        "Radial (side) load -- modeled as a cantilever beam; bending stress and tip deflection both checked."
-        if thickness.load_type == "radial"
-        else "Axial (thrust) load -- plate sized against screw-head pull-through (punching shear). For thrust, the plate is usually not the limiting element; see notes."
-    )
-    self_weight_line = (
-        f"- Component self-weight added to external load: {thickness.self_weight_n:.2f} N -> effective load {thickness.effective_load_n:.2f} N\n"
-        if thickness.self_weight_n > 0
-        else ""
-    )
     notes_block = ""
     if thickness.notes:
-        notes_block = "\n### Engineering notes\n"
+        notes_block = "\n### Notes\n"
         for n in thickness.notes:
             if n.level in ("WARN", "LOUD WARN"):
                 notes_block += f"- **[{n.level}]** {n.message}\n"
@@ -441,18 +641,23 @@ def write_report(
 ## Request
 - Mount: {mount_name}
 - Material: {material_name}
-- Load type: {thickness.load_type} ({load_type_note})
-- External load: {load_n} N
-{self_weight_line}- Safety factor: {safety_factor}
+- Shaft load: {shaft_load_n} N {getattr(decision, 'load_type', 'n/a')}
+- Bracket load: {thickness.plate_load_n:g} N (not a shaft load; not modelled)
+- Safety factor: {safety_factor}
 
-## Calculated requirement (domain rules layer, before generation)
-- Lever arm: {thickness.lever_arm_mm:.2f} mm
-- Bending moment: {thickness.moment_n_mm:.1f} N*mm
-- Allowable stress (yield / safety factor): {thickness.allowable_stress_mpa:.1f} MPa
-- Thickness from stress limit: {thickness.thickness_from_stress_mm:.2f} mm
-- Thickness from deflection limit (arm/300, radial only): {thickness.thickness_from_deflection_mm:.2f} mm
+{_shaft_section(decision)}
+## Plate thickness
+
+Thickness is a manufacturing answer, not a structural one. The two candidates
+are floors -- what the process can produce, and what the bearing needs to seat
+in -- and the larger wins. ZooMounter does not size this plate against a load,
+because for every part in its scope the structural requirement lands below the
+process floor; see `docs/mechanics.html` for why that layer was removed rather
+than kept as a sanity check.
+
 - Process minimum wall: {thickness.min_wall_mm:.2f} mm
-- **Required thickness: {thickness.required_thickness_mm:.2f} mm** (governed by: {thickness.governing_limit})
+- Bearing seat requirement: {thickness.bearing_seat_min_mm:.2f} mm
+- **Required thickness: {thickness.required_thickness_mm:.2f} mm** (set by: {thickness.governing_limit})
 {notes_block}
 ## Verification (generated part vs. the spec it was asked for)
 
@@ -478,9 +683,9 @@ def _add_to_project(args, mount, material, thickness, kcl_code: str) -> int:
         return 1
 
     comment = (
-        f"{mount.name} in {material.name}, {args.load_n}N {thickness.load_type} load, "
+        f"{mount.name} in {material.name}, {args.shaft_load_n}N {args.load_type} shaft load, "
         f"SF {args.safety_factor} -> {thickness.required_thickness_mm:.2f}mm thick "
-        f"(governed by {thickness.governing_limit})"
+        f"(set by {thickness.governing_limit})"
     )
     try:
         part_path, entry_modified = zoo_project.add_part(
@@ -534,6 +739,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
 
+    resolve_load_aliases(args)
     fill_in_interactively(args)
 
     try:
@@ -549,7 +755,7 @@ def main(argv: list[str] | None = None) -> int:
                 return 2
             mount, bearing_selection = bearings.auto_bearing_mount(
                 load_type=args.load_type,
-                load_n=args.load_n,
+                load_n=args.shaft_load_n,
                 shaft_dia_mm=shaft,
                 safety_factor=args.safety_factor,
                 designation=args.bearing,
@@ -590,13 +796,24 @@ def main(argv: list[str] | None = None) -> int:
         console.print(f"[red]error:[/red] {e}")
         return 1
 
+    # The shaft question first, because it is the one with a real answer. A
+    # bearing block carries the load by design, so there is no motor shaft to
+    # protect and the check does not apply to it.
+    decision = None
+    if mount.kind == "motor":
+        decision = mechanics.shaft_support(
+            mount=base_mount,
+            shaft_load_n=args.shaft_load_n,
+            load_type=args.load_type,
+            offset_mm=args.overhang_mm,
+        )
+        if decision.needs_bearing:
+            decision.checks.append(_bearing_that_would_carry_it(base_mount, args))
+
     thickness = mechanics.required_thickness(
-        load_n=args.load_n,
         mount=mount,
         material=material,
-        safety_factor=args.safety_factor,
-        lever_arm_mm=args.overhang_mm,
-        load_type=args.load_type,
+        plate_load_n=args.plate_load_n,
     )
     if bearing_selection is not None and bearing_selection.bearing is not None:
         from . import bearings as _b
@@ -612,7 +829,7 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     console.print()
-    print_spec_summary(mount, material, args, thickness)
+    print_spec_summary(mount, material, args, thickness, decision)
 
     scheme = None
     if args.literal_prompt:
@@ -681,8 +898,9 @@ def main(argv: list[str] | None = None) -> int:
 
     report_path = output_dir / "inspection_report.md"
     write_report(
-        report_path, mount.name, material.name, args.load_n,
+        report_path, mount.name, material.name, args.shaft_load_n,
         args.safety_factor, thickness, result, preview_path=preview_path,
+        decision=decision,
     )
 
     console.print()

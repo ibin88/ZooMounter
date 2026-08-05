@@ -2,11 +2,18 @@
 
 A thin presentation layer over the same backend the CLI uses -- no
 duplicated logic. Every field maps directly to a `zoomounter.cli.build_parser`
-flag; the domain-rules calc (mechanics.required_thickness) runs locally and
-instantly as you fill in the form (no API cost), so you can see the
-calculated thickness before committing to a generation call. "Generate &
-Verify" runs the real Agent API -> Zoo CLI export -> File Format API
-pipeline in a background thread so the window stays responsive, then shows
+flag, and the domain-rules layer runs locally and instantly as you fill in the
+form, at no API cost.
+
+What the preview leads with is `mechanics.shaft_support`: whether the load
+exceeds what the motor's own bearings can take. Thickness is shown after it,
+because thickness is a manufacturing floor here rather than a structural
+result. An earlier version had this the other way round, with a deflecting-beam
+diagram and a thickness headline -- which put the plate at the centre of a
+picture whose real subject is the shaft.
+
+"Generate & Verify" runs the real Agent API -> Zoo CLI export -> File Format
+API pipeline in a background thread so the window stays responsive, then shows
 the same pass/fail results the CLI report contains.
 
 Run with: python -m zoomounter.gui
@@ -174,7 +181,7 @@ class App(ctk.CTk):
         row += 1
         ctk.CTkLabel(
             form,
-            text="radial = side load (belt/pulley), bending-governed. axial = thrust along bolt axis, bearing-stress-governed.",
+            text="radial = side load on the shaft (belt/pulley). axial = thrust along the shaft (leadscrew).",
             font=ctk.CTkFont(size=11),
             text_color="gray60",
             anchor="w",
@@ -182,11 +189,28 @@ class App(ctk.CTk):
         ).grid(row=row, column=0, columnspan=2, sticky="w")
         row += 1
 
-        self.load_var = self._labeled_entry(form, row, "Load (N)", "5")
+        self.load_var = self._labeled_entry(form, row, "Shaft load (N)", "5")
+        row += 1
+        self.plate_load_var = self._labeled_entry(form, row, "Bracket load (N)", "0")
+        row += 1
+        ctk.CTkLabel(
+            form,
+            text=(
+                "Shaft load acts at the shaft and is checked against the motor's rating. "
+                "Bracket load is anything bolted to the plate -- it never reaches the shaft, "
+                "so it is not checked against that rating."
+            ),
+            font=ctk.CTkFont(size=11),
+            text_color="gray60",
+            anchor="w",
+            wraplength=380,
+        ).grid(row=row, column=0, columnspan=2, sticky="w")
         row += 1
         self.safety_var = self._labeled_entry(form, row, "Safety factor", "2.0")
         row += 1
-        self.overhang_var = self._labeled_entry(form, row, "Overhang override (mm, blank=auto, radial only)", "")
+        self.overhang_var = self._labeled_entry(
+            form, row, "Shaft load offset (mm, blank=auto, radial only)", ""
+        )
         row += 1
         ctk.CTkLabel(form, text="Output base folder").grid(row=row, column=0, sticky="w")
         output_row = ctk.CTkFrame(form, fg_color="transparent")
@@ -321,7 +345,7 @@ class App(ctk.CTk):
             return
 
         try:
-            mount, _material, _load, _sf, thickness = self._resolve_spec()
+            mount, _material, _load, _sf, thickness, _decision = self._resolve_spec()
             base = get_mount(
                 self.mount_var.get(),
                 plate_width_mm=float(self.plate_width_var.get()) if self.plate_width_var.get() else None,
@@ -712,15 +736,25 @@ class App(ctk.CTk):
         else:
             self._selected_bearing = None
 
+        # The shaft question is answered against the base component, before
+        # any host-side features widen the plate -- widening a bracket does
+        # not change what the motor's bearings can take.
+        decision = (
+            mechanics.shaft_support(
+                mount=mount,
+                shaft_load_n=load_n,
+                load_type=self.load_type_var.get(),
+                offset_mm=overhang,
+            )
+            if mount.kind == "motor"
+            else None
+        )
         thickness = mechanics.required_thickness(
-            load_n=load_n,
             mount=mount,
             material=material,
-            safety_factor=safety_factor,
-            lever_arm_mm=overhang,
-            load_type=self.load_type_var.get(),
+            plate_load_n=float(self.plate_load_var.get() or 0),
         )
-        
+
         # Add selection notes if we integrated a bearing
         if self.integrate_bearing_var.get() and getattr(self, "_selected_bearing", None):
             from . import bearings as _b
@@ -730,7 +764,7 @@ class App(ctk.CTk):
                                     self.load_type_var.get())
             )
 
-        return mount, material, load_n, safety_factor, thickness
+        return mount, material, load_n, safety_factor, thickness, decision
 
     def _resolve_bearing_spec(self):
         """Same shape as _resolve_spec, for a block built around a bearing
@@ -758,10 +792,8 @@ class App(ctk.CTk):
             process=self.process_var.get(),
         )
         thickness = mechanics.required_thickness(
-            load_n=load_n, mount=mount, material=material,
-            safety_factor=safety_factor,
-            lever_arm_mm=float(self.overhang_var.get()) if self.overhang_var.get() else None,
-            load_type=self.load_type_var.get(),
+            mount=mount, material=material,
+            plate_load_n=float(self.plate_load_var.get() or 0),
         )
         # Selection notes ride along with the thickness result so they reach
         # the results panel and the report without extra plumbing.
@@ -772,27 +804,158 @@ class App(ctk.CTk):
                                 self.load_type_var.get())
         )
         self._selected_bearing = selection.bearing
-        return mount, material, load_n, safety_factor, thickness
+        # No shaft decision: a bearing block carries the load by design, so
+        # there is no motor shaft rating for it to be measured against.
+        return mount, material, load_n, safety_factor, thickness, None
+
+    _VERDICT_LABEL = {
+        mechanics.BEARING_REQUIRED: "BEARING REQUIRED",
+        mechanics.BEARING_RECOMMENDED: "BEARING RECOMMENDED",
+        mechanics.SHAFT_UNKNOWN: "SHAFT LOAD NOT CHECKED",
+        mechanics.SHAFT_OK: "SHAFT OK",
+    }
 
     def _preview(self) -> None:
         try:
-            mount, material, load_n, safety_factor, thickness = self._resolve_spec()
+            mount, material, load_n, safety_factor, thickness, decision = self._resolve_spec()
         except (ValueError, TypeError) as e:
             self._show_preview_popup(f"Input error: {e}", is_error=True)
             return
-        lines = [
-            f"Required thickness: {thickness.required_thickness_mm:.2f} mm "
-            f"(governed by {thickness.governing_limit})",
-            f"[{thickness.load_type}] stress: {thickness.thickness_from_stress_mm:.2f} mm, "
-            f"deflection: {thickness.thickness_from_deflection_mm:.2f} mm, "
-            f"process min: {thickness.min_wall_mm:.2f} mm",
+
+        lines = []
+        # Shaft verdict leads. Thickness used to hold this slot while being
+        # set by the process floor in every real case.
+        if decision is not None:
+            lines.append(self._VERDICT_LABEL[decision.verdict])
+            if decision.utilisation is not None:
+                lines.append(
+                    f"{decision.utilisation * 100:.0f}% of the published "
+                    f"{decision.load_type} limit"
+                )
+            lines.extend(f"- {c}" for c in decision.checks)
+            lines.append("")
+
+        lines += [
+            f"Plate thickness: {thickness.required_thickness_mm:.2f} mm "
+            f"(set by {thickness.governing_limit})",
+            f"Process minimum wall: {thickness.min_wall_mm:.2f} mm"
+            + (
+                f", bearing seat: {thickness.bearing_seat_min_mm:.2f} mm"
+                if thickness.bearing_seat_min_mm
+                else ""
+            ),
             f"Plate: {mount.plate_width_mm:.1f} x {mount.plate_height_mm:.1f} mm",
         ]
         lines.extend(f"- {n}" for n in thickness.notes)
-        has_warning = any(n.level in ("WARN", "LOUD WARN") for n in thickness.notes)
-        self._show_preview_popup("\n".join(lines), is_error=False, has_warning=has_warning, thickness=thickness, mount=mount)
 
-    def _show_preview_popup(self, text: str, is_error: bool = False, has_warning: bool = False, thickness=None, mount=None) -> None:
+        all_checks = list(thickness.notes) + (list(decision.checks) if decision else [])
+        has_warning = any(n.level in ("WARN", "LOUD WARN") for n in all_checks)
+        self._show_preview_popup(
+            "\n".join(lines), is_error=False, has_warning=has_warning,
+            thickness=thickness, mount=mount, decision=decision,
+        )
+
+    def _draw_shaft_diagram(self, canvas, w, h, cx, cy, thickness, decision, arrow_last) -> None:
+        """Draw the load path and how much of the shaft's rating it uses.
+
+        Deliberately schematic rather than to scale: the point is which way the
+        load acts and how close to the limit it is, and a to-scale drawing of a
+        1mm plate under a 40mm motor communicates neither.
+        """
+        if decision is None:
+            canvas.create_text(
+                cx, cy,
+                text="Bearing block -- carries the shaft load by design.\n"
+                     "No motor shaft rating applies.",
+                fill="gray70", justify="center",
+            )
+            return
+
+        plate_x, plate_top, plate_h, plate_w = cx - 60, cy - 55, 110, 14
+        # Motor body behind the plate.
+        canvas.create_rectangle(
+            plate_x - 78, cy - 38, plate_x, cy + 38, fill="#333", outline="gray"
+        )
+        canvas.create_text(plate_x - 39, cy, text="Motor", fill="gray70")
+        # The plate.
+        canvas.create_rectangle(
+            plate_x, plate_top, plate_x + plate_w, plate_top + plate_h,
+            fill="#2fa572", outline="white", width=2,
+        )
+        canvas.create_text(
+            plate_x + plate_w / 2, plate_top + plate_h + 12,
+            text=f"{thickness.required_thickness_mm:.2f}mm", fill="white",
+        )
+        # The shaft, running out through the plate to where the load acts.
+        shaft_len = 150
+        canvas.create_rectangle(
+            plate_x + plate_w, cy - 5, plate_x + plate_w + shaft_len, cy + 5,
+            fill="#888", outline="black",
+        )
+        load_x = plate_x + plate_w + shaft_len - 18
+
+        if decision.load_type == "radial":
+            canvas.create_line(
+                load_x, cy - 55, load_x, cy - 10,
+                arrow=arrow_last, fill="#e05252", width=3,
+            )
+            canvas.create_text(
+                load_x + 6, cy - 62,
+                text=f"{decision.shaft_load_n:.0f} N", fill="#e05252", anchor="w",
+            )
+            # The offset is the whole reason a radial rating needs a distance.
+            dim_y = cy + 46
+            canvas.create_line(plate_x + plate_w, dim_y, load_x, dim_y, fill="#777")
+            for x in (plate_x + plate_w, load_x):
+                canvas.create_line(x, dim_y - 5, x, dim_y + 5, fill="#777")
+            canvas.create_text(
+                (plate_x + plate_w + load_x) / 2, dim_y + 12,
+                text=f"{decision.offset_mm:g}mm from face", fill="white",
+            )
+        else:
+            canvas.create_line(
+                load_x + 40, cy, load_x - 10, cy,
+                arrow=arrow_last, fill="#e05252", width=3,
+            )
+            canvas.create_text(
+                load_x + 46, cy - 14,
+                text=f"{decision.shaft_load_n:.0f} N thrust", fill="#e05252", anchor="w",
+            )
+
+        if decision.utilisation is None:
+            canvas.create_text(
+                cx, h - 22, text="No published limit on file -- not checked.",
+                fill="#e0a052",
+            )
+            return
+
+        # Utilisation bar. A verdict alone cannot distinguish 101% from 12x,
+        # and those call for very different responses.
+        bar_x, bar_w, bar_y = 40, max(120, w - 80), h - 26
+        frac = min(decision.utilisation, 1.0)
+        colour = {
+            mechanics.SHAFT_OK: "#2fa572",
+            mechanics.BEARING_RECOMMENDED: "#e0a052",
+            mechanics.BEARING_REQUIRED: "#e05252",
+        }[decision.verdict]
+        canvas.create_rectangle(
+            bar_x, bar_y, bar_x + bar_w, bar_y + 14, fill="#444", outline="#666"
+        )
+        canvas.create_rectangle(
+            bar_x, bar_y, bar_x + bar_w * frac, bar_y + 14, fill=colour, outline=""
+        )
+        basis = (
+            f"{decision.applied_n_mm:.0f} / {decision.limit_n_mm:.0f} N.mm"
+            if decision.load_type == "radial"
+            else f"{decision.shaft_load_n:.0f} / {decision.limit_n:.0f} N"
+        )
+        canvas.create_text(
+            bar_x + bar_w / 2, bar_y - 10,
+            text=f"{decision.utilisation * 100:.0f}% of published limit  ({basis})",
+            fill=colour,
+        )
+
+    def _show_preview_popup(self, text: str, is_error: bool = False, has_warning: bool = False, thickness=None, mount=None, decision=None) -> None:
         popup = ctk.CTkToplevel(self)
         popup.title("Preview Calculation")
         popup.geometry("550x550")
@@ -816,87 +979,14 @@ class App(ctk.CTk):
             h = canvas.winfo_height() or 220
             cx, cy = w / 2, h / 2
 
-            if thickness.load_type == "radial":
-                # Draw cantilever beam
-                beam_w = 200
-                beam_h = max(10, thickness.required_thickness_mm * 2)
-                wall_x = cx - beam_w / 2 - 20
-                wall_y = cy - 20
-                
-                # Wall
-                canvas.create_rectangle(wall_x - 10, wall_y - 60, wall_x, wall_y + 80, fill="#555", outline="gray")
-                for i in range(5):
-                    y = wall_y - 40 + i*25
-                    canvas.create_line(wall_x - 10, y, wall_x - 20, y + 10, fill="gray")
-                
-                # Beam (undeflected outline)
-                canvas.create_rectangle(wall_x, wall_y - beam_h/2, wall_x + beam_w, wall_y + beam_h/2, fill="", outline="#444", dash=(2, 4))
-                
-                # Deflected Beam
-                deflect_px = 30  # exaggerated for visual effect
-                pts = [wall_x, wall_y - beam_h/2]
-                for i in range(1, 11):
-                    x = wall_x + (beam_w * i / 10)
-                    y = (wall_y - beam_h/2) + deflect_px * (i/10)**2
-                    pts.extend([x, y])
-                for i in range(10, -1, -1):
-                    x = wall_x + (beam_w * i / 10)
-                    y = (wall_y + beam_h/2) + deflect_px * (i/10)**2
-                    pts.extend([x, y])
-                canvas.create_polygon(pts, fill="#2fa572", outline="white", width=2)
-                
-                # Load arrow
-                arrow_x = wall_x + beam_w - 10
-                arrow_y1 = wall_y + beam_h/2 + deflect_px - 40
-                arrow_y2 = wall_y + beam_h/2 + deflect_px + 10
-                canvas.create_line(arrow_x, arrow_y1, arrow_x, arrow_y2, arrow=(ctk.LAST if 'tk' not in globals() else 'last'), fill="#e05252", width=3)
-                canvas.create_text(arrow_x + 10, arrow_y1 - 10, text=f"{thickness.effective_load_n:.0f} N", fill="#e05252", anchor="w")
-                
-                # Lever arm dimension
-                dim_y = wall_y - 40
-                canvas.create_line(wall_x, dim_y, wall_x + beam_w, dim_y, fill="#777", width=1)
-                canvas.create_line(wall_x, dim_y - 5, wall_x, dim_y + 5, fill="#777", width=1)
-                canvas.create_line(wall_x + beam_w, dim_y - 5, wall_x + beam_w, dim_y + 5, fill="#777", width=1)
-                canvas.create_text(wall_x + beam_w/2, dim_y - 10, text=f"Lever arm: {thickness.lever_arm_mm:.1f} mm", fill="white")
-                
-                # Deflection label
-                canvas.create_line(wall_x + beam_w + 10, wall_y, wall_x + beam_w + 10, wall_y + deflect_px, fill="cyan", dash=(2, 2))
-                canvas.create_text(wall_x + beam_w + 15, wall_y + deflect_px/2, text=f"Defl: {thickness.thickness_from_deflection_mm:.1f} mm", fill="cyan", anchor="w")
-
-            else:
-                # Axial: show punch-through shear
-                plate_h = 140
-                plate_w = max(20, thickness.required_thickness_mm * 3)
-                px = cx - plate_w/2
-                py = cy
-                
-                # Plate
-                canvas.create_rectangle(px, py - plate_h/2, px + plate_w, py + plate_h/2, fill="#2fa572", outline="white", width=2)
-                
-                # Motor body
-                canvas.create_rectangle(px + plate_w, py - 40, px + plate_w + 80, py + 40, fill="#333", outline="gray")
-                canvas.create_text(px + plate_w + 40, py, text="Motor", fill="gray")
-                
-                # Screw head pulling through
-                hole_y = py - 30
-                screw_w = 40
-                head_w = 12
-                head_h = 24
-                # screw shaft
-                canvas.create_rectangle(px - head_w, hole_y - 4, px + screw_w, hole_y + 4, fill="#888", outline="black")
-                # screw head
-                canvas.create_rectangle(px - head_w, hole_y - head_h/2, px, hole_y + head_h/2, fill="#aaa", outline="black")
-                
-                # Shear lines
-                canvas.create_line(px, hole_y - head_h/2, px + plate_w, hole_y - head_h/2, fill="red", dash=(4, 4), width=2)
-                canvas.create_line(px, hole_y + head_h/2, px + plate_w, hole_y + head_h/2, fill="red", dash=(4, 4), width=2)
-                
-                # Force arrows pulling screw out
-                canvas.create_line(px - head_w - 20, hole_y, px - head_w, hole_y, arrow=(ctk.LAST if 'tk' not in globals() else 'last'), fill="#e05252", width=3)
-                canvas.create_text(px - head_w - 30, hole_y, text=f"{thickness.effective_load_n:.0f} N\n(thrust)", fill="#e05252", anchor="e")
-                
-                # Annotation
-                canvas.create_text(cx, py + plate_h/2 + 20, text=f"Governing limit: {thickness.governing_limit}", fill="white")
+            # The diagram that used to sit here drew a deflecting cantilever
+            # and a screw punching through a plate. Both illustrated
+            # calculations the tool no longer makes, and both put the plate at
+            # the centre of a picture whose real subject is the shaft. What is
+            # drawn now is the load path and the utilisation, because that is
+            # what decides the part.
+            arrow_last = ctk.LAST if "tk" not in globals() else "last"
+            self._draw_shaft_diagram(canvas, w, h, cx, cy, thickness, decision, arrow_last)
 
         label = ctk.CTkLabel(
             popup, 
@@ -917,7 +1007,7 @@ class App(ctk.CTk):
         if self.generation_running:
             return
         try:
-            mount, material, load_n, safety_factor, thickness = self._resolve_spec()
+            mount, material, load_n, safety_factor, thickness, decision = self._resolve_spec()
         except (ValueError, TypeError) as e:
             self.status_label.configure(text=f"Input error: {e}", text_color="#e05252")
             return
@@ -937,19 +1027,20 @@ class App(ctk.CTk):
 
         thread = threading.Thread(
             target=self._run_pipeline,
-            args=(mount, material, load_n, safety_factor, thickness, self.export_step_var.get()),
+            args=(mount, material, load_n, safety_factor, thickness, decision,
+                  self.export_step_var.get()),
             daemon=True,
         )
         thread.start()
 
-    def _run_pipeline(self, mount, material, load_n, safety_factor, thickness, do_export_step: bool) -> None:
+    def _run_pipeline(self, mount, material, load_n, safety_factor, thickness, decision, do_export_step: bool) -> None:
         # Catches *any* exception, not just our own error types -- a
         # background thread that dies on an unexpected error otherwise
         # leaves the GUI stuck on "Working..." forever with no explanation,
         # which is exactly what happened here (see comment in
         # _show_preview_image for the specific bug that triggered it).
         try:
-            self._run_pipeline_inner(mount, material, load_n, safety_factor, thickness, do_export_step)
+            self._run_pipeline_inner(mount, material, load_n, safety_factor, thickness, decision, do_export_step)
         except Exception as e:
             traceback.print_exc()
             self.after(0, lambda: self._on_generate_error(f"{type(e).__name__}: {e}"))
@@ -988,7 +1079,7 @@ class App(ctk.CTk):
             traceback.print_exc()
             return None
 
-    def _run_pipeline_inner(self, mount, material, load_n, safety_factor, thickness, do_export_step: bool) -> None:
+    def _run_pipeline_inner(self, mount, material, load_n, safety_factor, thickness, decision, do_export_step: bool) -> None:
         def on_status(elapsed: float, status: str) -> None:
             self.after(0, lambda: self.status_label.configure(text=f"Generating... {status} ({elapsed:.0f}s elapsed)"))
 
@@ -1031,7 +1122,7 @@ class App(ctk.CTk):
             report_preview = None
         write_report(
             report_path, mount.name, material.name, load_n, safety_factor,
-            thickness, result, preview_path=report_preview,
+            thickness, result, preview_path=report_preview, decision=decision,
         )
         self.after(0, lambda: self._on_generate_done(result, report_path))
 

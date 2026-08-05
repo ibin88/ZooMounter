@@ -15,7 +15,14 @@ import pytest
 
 from zoomounter import cli
 from zoomounter.materials import get_material
-from zoomounter.mechanics import COMPONENT_LOAD_LIMIT, required_thickness
+from zoomounter.mechanics import (
+    BEARING_REQUIRED,
+    SHAFT_LIMIT,
+    SHAFT_LIMIT_UNKNOWN,
+    SHAFT_OK,
+    SHAFT_UNKNOWN,
+    shaft_support,
+)
 from zoomounter.mount_specs import (
     EXTRUSION_SERIES,
     MOUNTS,
@@ -28,28 +35,19 @@ ALUMINIUM = get_material("aluminum_6061")
 SF = 2.0
 
 
-def _checks(mount_name, load_n, load_type):
-    result = required_thickness(
-        load_n=load_n,
-        mount=get_mount(mount_name),
-        material=ALUMINIUM,
-        load_type=load_type,
-        safety_factor=SF,
-    )
-    return result.notes
-
-
-def _limit_check(mount_name, load_n, load_type):
+def _limit_check(mount_name, load_n, load_type, offset_mm=None):
     """The single Check that reports on the component's own shaft limit.
 
     Selected by code, not by message text -- an earlier version of this
     helper matched on the word "limit" and caught two unrelated notes
     ("your limiting element", "not structurally limited")."""
-    hits = [
-        c
-        for c in _checks(mount_name, load_n, load_type)
-        if c.code == COMPONENT_LOAD_LIMIT
-    ]
+    decision = shaft_support(
+        mount=get_mount(mount_name),
+        shaft_load_n=load_n,
+        load_type=load_type,
+        offset_mm=offset_mm,
+    )
+    hits = [c for c in decision.checks if c.code in (SHAFT_LIMIT, SHAFT_LIMIT_UNKNOWN)]
     assert len(hits) == 1, f"expected exactly one limit check, got {len(hits)}"
     return hits[0]
 
@@ -99,11 +97,83 @@ def test_unknown_limit_warns_rather_than_passing():
     assert "NOT been checked" in check.message
 
 
-def test_limit_warning_survives_a_thick_enough_plate():
-    """No plate thickness can raise the motor's own bearing rating, so the
-    warning must not disappear just because the plate is adequate."""
+def test_limit_warning_is_independent_of_the_plate():
+    """No plate thickness can raise the motor's own bearing rating. The shaft
+    decision is therefore computed without reference to the plate at all --
+    this used to be a note attached to a thickness result, which is what made
+    it read as a caveat on the answer rather than as the answer."""
     check = _limit_check("nema23", 500, "axial")
     assert check.level == "LOUD WARN"
+
+
+# ---------------------------------------------------------------------------
+# A radial rating is a moment limit. Both sides must be converted before being
+# compared, or the same load reads as safe at one offset and not at another
+# while the tool reports no difference.
+# ---------------------------------------------------------------------------
+
+
+def test_radial_comparison_uses_moments_not_forces():
+    """28N is exactly the NEMA 17's rated force, but the rating is quoted at
+    20mm. Applied at 40mm it is twice the rated moment, and comparing the bare
+    forces would call that a pass."""
+    at_rated_distance = shaft_support(get_mount("nema17"), 28, "radial", offset_mm=20)
+    assert at_rated_distance.verdict != BEARING_REQUIRED
+    assert at_rated_distance.utilisation == pytest.approx(1.0)
+
+    further_out = shaft_support(get_mount("nema17"), 28, "radial", offset_mm=40)
+    assert further_out.verdict == BEARING_REQUIRED
+    assert further_out.utilisation == pytest.approx(2.0)
+
+
+def test_a_load_closer_in_is_not_judged_harshly():
+    """The error runs both ways. 30N at 10mm exceeds the rated FORCE of 28N,
+    but sits at 54% of the rated MOMENT -- comparing forces would fail a load
+    the motor comfortably takes."""
+    decision = shaft_support(get_mount("nema17"), 30, "radial", offset_mm=10)
+    assert decision.shaft_load_n > decision.limit_n  # above the rated force
+    assert decision.utilisation == pytest.approx(300 / 560)
+    assert decision.verdict == SHAFT_OK
+
+
+def test_axial_is_not_scaled_by_offset():
+    """Thrust loads the shaft along its axis wherever it comes from, so the
+    offset must not enter the axial comparison."""
+    near = shaft_support(get_mount("nema17"), 8, "axial", offset_mm=5)
+    far = shaft_support(get_mount("nema17"), 8, "axial", offset_mm=500)
+    assert near.utilisation == far.utilisation == pytest.approx(0.8)
+
+
+def test_every_radial_rating_ships_its_measurement_distance():
+    """The catalogue loader enforces this, but assert it here too: a rating
+    without its distance cannot be compared to anything, and the comparison
+    above would silently divide by a missing number."""
+    for key, spec in MOUNTS.items():
+        if spec.max_radial_n is not None:
+            assert spec.max_radial_at_mm, (
+                f"{key}: publishes max_radial_n with no max_radial_at_mm"
+            )
+
+
+# ---------------------------------------------------------------------------
+# A shaft load and a bracket load are different physical quantities. Feeding a
+# bracket load to the shaft check reports an overload that cannot happen.
+# ---------------------------------------------------------------------------
+
+
+def test_a_bracket_load_is_not_a_shaft_load():
+    """The CLI prompted for "expected load on the mount" and compared the
+    answer against the motor's SHAFT rating. Bolt a 50N camera to the plate
+    and it reported a shaft overload -- the camera's weight never reaches the
+    shaft. The two are now separate inputs, and only one is checked."""
+    from zoomounter.mechanics import PLATE_LOAD_UNMODELLED, required_thickness
+
+    result = required_thickness(
+        mount=get_mount("nema17"), material=ALUMINIUM, plate_load_n=50
+    )
+    codes = [c.code for c in result.notes]
+    assert PLATE_LOAD_UNMODELLED in codes
+    assert SHAFT_LIMIT not in codes, "a bracket load must not reach the shaft check"
 
 
 # ---------------------------------------------------------------------------
@@ -215,11 +285,8 @@ def test_host_mounted_parts_still_get_their_limit_checked(option):
     """The user-visible half of the bug: the warning must survive the
     host-mount transform, not degrade to 'not checked'."""
     spec = apply_host_mount(get_mount("nema17"), option)
-    result = required_thickness(
-        load_n=120, mount=spec, material=ALUMINIUM,
-        load_type="radial", safety_factor=SF,
-    )
-    checks = [c for c in result.notes if c.code == COMPONENT_LOAD_LIMIT]
+    decision = shaft_support(mount=spec, shaft_load_n=120, load_type="radial")
+    checks = [c for c in decision.checks if c.code in (SHAFT_LIMIT, SHAFT_LIMIT_UNKNOWN)]
     assert len(checks) == 1
     assert checks[0].level == "LOUD WARN", (
         f"{option}: 120N against a 28N limit must warn, got {checks[0].level}"
@@ -258,7 +325,8 @@ def _run_prompts(host_mount_preset):
         youngs_modulus_gpa=None,
         yield_mpa=None,
         load_type="radial",
-        load_n=5.0,
+        shaft_load_n=5.0,
+        plate_load_n=0.0,
     )
     asked = []
 

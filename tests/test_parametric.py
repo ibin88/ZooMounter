@@ -271,10 +271,11 @@ def test_every_builtin_mount_produces_a_usable_prompt():
 def _minimal_report(tmp_path, preview):
     from zoomounter import cli, verify
 
-    thickness = required_thickness(
-        load_n=20, mount=get_mount("nema17"), material=ALUMINIUM,
-        load_type="radial", safety_factor=2.0,
-    )
+    from zoomounter.mechanics import shaft_support
+
+    mount = get_mount("nema17")
+    thickness = required_thickness(mount=mount, material=ALUMINIUM)
+    decision = shaft_support(mount=mount, shaft_load_n=20, load_type="radial")
     # `passed` is a derived property over `checks`, not a field.
     result = verify.VerificationResult(
         checks=[verify.CheckResult(name="Bounding box", passed=True, detail="ok")]
@@ -282,7 +283,7 @@ def _minimal_report(tmp_path, preview):
     path = tmp_path / "inspection_report.md"
     cli.write_report(
         path, "NEMA 17", "Aluminium", 20.0, 2.0, thickness, result,
-        preview_path=preview,
+        preview_path=preview, decision=decision,
     )
     return path.read_text(encoding="utf-8")
 

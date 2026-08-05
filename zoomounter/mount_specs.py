@@ -111,6 +111,14 @@ class MountSpec:
     max_radial_n: float | None = None
     load_limit_source: str = ""  # primary source for the two figures above
 
+    # The distance from the mounting flange at which max_radial_n was measured.
+    # Mandatory in the catalogue whenever max_radial_n is present, because a
+    # radial rating is a moment limit expressed as a force plus a distance --
+    # 28N at 20mm and 28N at 15mm are different demands on the same bearing.
+    # Comparing a load to a rating without it is the recurring defect in this
+    # project: the number travelled and its conditions did not.
+    max_radial_at_mm: float | None = None
+
     # The SHAFT diameter, which is not center_hole_dia_mm. On a NEMA 17 the
     # centre hole is 22mm because that is the pilot boss the plate registers
     # on; the shaft running through it is 5mm. Bearing selection needs the
@@ -176,6 +184,7 @@ def _build_mounts() -> dict[str, MountSpec]:
             body_cg_offset_mm=row.get("body_cg_offset_mm", 0),
             max_axial_n=row.get("max_axial_n"),
             max_radial_n=row.get("max_radial_n"),
+            max_radial_at_mm=row.get("max_radial_at_mm"),
             load_limit_source=row.get("load_limit_source", ""),
             shaft_dia_mm=row.get("shaft_dia_mm", 0),
         )
