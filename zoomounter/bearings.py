@@ -589,13 +589,25 @@ def apply_bearing_topology(base, bearing: Bearing, topology: str, load_type: str
 
     if topology == TOPOLOGY_STUB_SHAFT:
         standoff = motor_standoff_for_coupling()
+        # The motor is not touching this plate, so there is no pilot boss to
+        # clear -- the only centre features are the bearing's.
+        #
+        # AXIAL: a blind counterbore at the OD seats the thrust bearing, and a
+        # smaller through-hole below it passes the shaft. Two real features.
+        #
+        # RADIAL: the seat is a THROUGH-bore at the OD, and a 22mm through-bore
+        # swallows a 9mm one. Asking for both produces a spec whose second
+        # feature cannot exist, and the verifier correctly reports it missing
+        # -- which is exactly what a live run showed: every hole the Agent API
+        # built was exact to 0.000mm, and the one it "missed" was one we should
+        # never have asked for. `bearing_block` had this right from the start
+        # ("the seat *is* the hole"); this path was written later and did not
+        # copy it.
+        centre_hole = bearing.bore_mm + SHAFT_CLEARANCE_MM if axial else 0.0
         spec = dataclasses.replace(
             base,
             name=f"{base.name} with {bearing.designation} on a stub shaft",
-            # The motor is not touching this plate, so there is no pilot boss
-            # to clear. The centre feature is the bearing seat and the hole the
-            # stub shaft turns in -- nothing else.
-            center_hole_dia_mm=bearing.bore_mm + SHAFT_CLEARANCE_MM,
+            center_hole_dia_mm=centre_hole,
             bearing_designation=bearing.designation,
             bearing_seat_dia_mm=bearing.od_mm,
             bearing_seat_depth_mm=bearing.width_mm if axial else 0.0,

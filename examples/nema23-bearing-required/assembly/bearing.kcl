@@ -1,0 +1,21 @@
+// Reference geometry for a 608 bearing (8x22x7mm).
+// Catalogue part shown seated in the mount; not a designed component.
+@settings(defaultLengthUnit = mm, kclVersion = 2.0)
+
+bearingOuterPlane = offsetPlane(XY, offset = -3.5)
+bearingOuterOuterSketch = sketch(on = bearingOuterPlane) {
+  profile = circle(start = [11mm, 0mm], center = [0mm, 0mm])
+  diameter(profile) == 22mm
+}
+bearingOuterInnerSketch = sketch(on = bearingOuterPlane) {
+  profile = circle(start = [4mm, 0mm], center = [0mm, 0mm])
+  diameter(profile) == 8mm
+}
+bearingOuterOuterRegion = region(segments = [bearingOuterOuterSketch.profile])
+bearingOuterInnerRegion = region(segments = [bearingOuterInnerSketch.profile])
+bearingOuterOuterExtrude = extrude(bearingOuterOuterRegion, length = 7)
+bearingOuterInnerExtrude = extrude(bearingOuterInnerRegion, length = 7)
+bearingOuterBody = subtract(bearingOuterOuterExtrude, tools = [bearingOuterInnerExtrude])
+  |> appearance(color = "#8a8f98")
+hiddenbearingOuterOuter = hide(bearingOuterOuterSketch)
+hiddenbearingOuterInner = hide(bearingOuterInnerSketch)

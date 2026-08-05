@@ -48,13 +48,18 @@ def test_the_topologies_produce_different_parts():
 def test_the_centre_bore_follows_what_actually_turns_in_it():
     """Direct bores for the MOTOR's shaft; stub-shaft bores for the BEARING's.
 
-    With a 625 on a NEMA 17 those are both 5mm and the two coincide, which is
-    the matched case and not a defect. Use a bearing whose bore differs from
-    the shaft and they separate -- which is also why only the direct topology
-    warns about a mismatch."""
-    mismatched = BY_DESIGNATION["608"]  # 8mm bore, 5mm NEMA 17 shaft
-    stub, _ = _spec(TOPOLOGY_STUB_SHAFT, bearing=mismatched)
-    direct, _ = _spec(TOPOLOGY_DIRECT, bearing=mismatched)
+    Compared on an AXIAL load, because that is the case where both topologies
+    have a separate shaft hole to compare. On a radial load the stub-shaft
+    seat is a through-bore and there is no second feature at all -- see
+    test_a_radial_seat_is_the_hole_and_does_not_also_request_a_shaft_bore,
+    which is the bug a live run found.
+
+    With a 625 on a NEMA 17 the two would coincide at 5mm, which is the matched
+    case and not a defect; a bearing whose bore differs from the shaft separates
+    them, and is also why only the direct topology warns about a mismatch."""
+    mismatched = BY_DESIGNATION["F8-16M"]  # 8mm bore against a 5mm NEMA 17 shaft
+    stub, _ = _spec(TOPOLOGY_STUB_SHAFT, bearing=mismatched, load_type="axial")
+    direct, _ = _spec(TOPOLOGY_DIRECT, bearing=mismatched, load_type="axial")
     assert stub.center_hole_dia_mm > direct.center_hole_dia_mm
     assert stub.center_hole_dia_mm == pytest.approx(mismatched.bore_mm + 1)
     assert direct.center_hole_dia_mm == pytest.approx(N17.shaft_dia_mm + 1)
@@ -395,3 +400,62 @@ def test_mcp_rejects_a_nonsense_face():
             mount="nema17", material="aluminum_6061", shaft_load_n=5,
             mounting_face="sideways",
         )
+
+
+# ---------------------------------------------------------------------------
+# A spec must not ask for two features that cannot coexist.
+# ---------------------------------------------------------------------------
+
+
+def test_a_radial_seat_is_the_hole_and_does_not_also_request_a_shaft_bore():
+    """Found by running the pipeline live, not by any offline test.
+
+    A radial bearing seats in a THROUGH-bore at its outside diameter. Asking
+    for a 9mm shaft hole as well as a 22mm through-bore puts a feature in the
+    spec that the larger bore swallows -- so the Agent API cannot build it, the
+    verifier reports a missing hole, and the run FAILs on geometry that was
+    never possible.
+
+    Every other hole in that run came back exact to 0.000mm. The tool was
+    wrong, not the API. `bearing_block` had this right ("the seat *is* the
+    hole"); apply_bearing_topology was written later and did not copy it."""
+    for topology in BEARING_TOPOLOGIES:
+        spec, _ = _spec(topology, bearing=BY_DESIGNATION["608"], load_type="radial",
+                        mount=get_mount("nema23"))
+        if spec.bearing_seat_depth_mm == 0 and spec.bearing_seat_dia_mm > 0:
+            assert spec.center_hole_dia_mm == 0, (
+                f"{topology}: a through-bore seat at "
+                f"{spec.bearing_seat_dia_mm:g}mm cannot coexist with a "
+                f"{spec.center_hole_dia_mm:g}mm centre hole"
+            )
+
+
+def test_an_axial_seat_does_keep_its_shaft_through_hole():
+    """The counterpart. A blind counterbore leaves material below it, so the
+    shaft hole through that floor is a real second feature."""
+    spec, _ = _spec(TOPOLOGY_STUB_SHAFT, bearing=BY_DESIGNATION["F8-16M"],
+                    load_type="axial", mount=get_mount("nema23"))
+    assert spec.bearing_seat_depth_mm > 0
+    assert spec.center_hole_dia_mm > 0
+
+
+def test_no_spec_requests_a_hole_a_larger_concentric_bore_would_swallow():
+    """The general form, over every topology and load type in the catalogue."""
+    for key in ("nema17", "nema23"):
+        mount = get_mount(key)
+        for topology in BEARING_TOPOLOGIES:
+            for load_type in ("radial", "axial"):
+                for designation in ("608", "625", "F8-16M", "F5-12M"):
+                    bearing = BY_DESIGNATION[designation]
+                    spec, _ = _spec(topology, bearing=bearing,
+                                    load_type=load_type, mount=mount)
+                    through_bore = (
+                        spec.bearing_seat_dia_mm > 0
+                        and spec.bearing_seat_depth_mm == 0
+                    )
+                    if through_bore and spec.center_hole_dia_mm > 0:
+                        assert spec.center_hole_dia_mm > spec.bearing_seat_dia_mm, (
+                            f"{key}/{topology}/{load_type}/{designation}: "
+                            f"{spec.center_hole_dia_mm:g}mm hole sits inside a "
+                            f"{spec.bearing_seat_dia_mm:g}mm through-bore"
+                        )

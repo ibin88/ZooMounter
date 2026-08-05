@@ -1,0 +1,117 @@
+// Reference geometry for a NEMA 23 stepper motor mount with 608 on a stub shaft, front-face mounted.
+// Drawn from catalogue dimensions for context only -- this is not
+// the designed part and is not verified against anything.
+@settings(defaultLengthUnit = mm, kclVersion = 2.0)
+
+motorBodyPlane = offsetPlane(XY, offset = 58.5)
+motorBodySketch = sketch(on = motorBodyPlane) {
+  e1 = line(start = [-28.2mm, -28.2mm], end = [28.2mm, -28.2mm])
+  e2 = line(start = [28.2mm, -28.2mm], end = [28.2mm, 28.2mm])
+  e3 = line(start = [28.2mm, 28.2mm], end = [-28.2mm, 28.2mm])
+  e4 = line(start = [-28.2mm, 28.2mm], end = [-28.2mm, -28.2mm])
+}
+motorBodyRegion = region(
+  segments = [motorBodySketch.e1, motorBodySketch.e2, motorBodySketch.e3, motorBodySketch.e4],
+)
+motorBodySolid = extrude(motorBodyRegion, length = 56)
+motorBodyHole0Sketch = sketch(on = motorBodyPlane) {
+  profile = circle(start = [26.32mm, 23.57mm], center = [23.57mm, 23.57mm])
+  diameter(profile) == 5.5mm
+}
+motorBodyHole0Region = region(segments = [motorBodyHole0Sketch.profile])
+motorBodyHole0Solid = extrude(motorBodyHole0Region, length = 5)
+motorBodyHole1Sketch = sketch(on = motorBodyPlane) {
+  profile = circle(start = [26.32mm, -23.57mm], center = [23.57mm, -23.57mm])
+  diameter(profile) == 5.5mm
+}
+motorBodyHole1Region = region(segments = [motorBodyHole1Sketch.profile])
+motorBodyHole1Solid = extrude(motorBodyHole1Region, length = 5)
+motorBodyHole2Sketch = sketch(on = motorBodyPlane) {
+  profile = circle(start = [-20.82mm, -23.57mm], center = [-23.57mm, -23.57mm])
+  diameter(profile) == 5.5mm
+}
+motorBodyHole2Region = region(segments = [motorBodyHole2Sketch.profile])
+motorBodyHole2Solid = extrude(motorBodyHole2Region, length = 5)
+motorBodyHole3Sketch = sketch(on = motorBodyPlane) {
+  profile = circle(start = [-20.82mm, 23.57mm], center = [-23.57mm, 23.57mm])
+  diameter(profile) == 5.5mm
+}
+motorBodyHole3Region = region(segments = [motorBodyHole3Sketch.profile])
+motorBodyHole3Solid = extrude(motorBodyHole3Region, length = 5)
+motorBodyBody = subtract(motorBodySolid, tools = [motorBodyHole0Solid, motorBodyHole1Solid, motorBodyHole2Solid, motorBodyHole3Solid])
+  |> appearance(color = "#3d4756")
+hiddenmotorBody = hide(motorBodySketch)
+hiddenmotorBodyHole0 = hide(motorBodyHole0Sketch)
+hiddenmotorBodyHole1 = hide(motorBodyHole1Sketch)
+hiddenmotorBodyHole2 = hide(motorBodyHole2Sketch)
+hiddenmotorBodyHole3 = hide(motorBodyHole3Sketch)
+
+shaftPlane = offsetPlane(XY, offset = 58.5)
+shaftSketch = sketch(on = shaftPlane) {
+  profile = circle(start = [4mm, 0mm], center = [0mm, 0mm])
+  diameter(profile) == 8mm
+}
+shaftRegion = region(segments = [shaftSketch.profile])
+shaftBody = extrude(shaftRegion, length = -49)
+  |> appearance(color = "#c8ccd2")
+hiddenshaft = hide(shaftSketch)
+
+standoff0Plane = offsetPlane(XY, offset = 58.5)
+standoff0Sketch = sketch(on = standoff0Plane) {
+  profile = circle(start = [28.52mm, 23.57mm], center = [23.57mm, 23.57mm])
+  diameter(profile) == 9.9mm
+}
+standoff0Region = region(segments = [standoff0Sketch.profile])
+standoff0Body = extrude(standoff0Region, length = -30)
+  |> appearance(color = "#9aa2ad")
+hiddenstandoff0 = hide(standoff0Sketch)
+
+standoff1Plane = offsetPlane(XY, offset = 58.5)
+standoff1Sketch = sketch(on = standoff1Plane) {
+  profile = circle(start = [28.52mm, -23.57mm], center = [23.57mm, -23.57mm])
+  diameter(profile) == 9.9mm
+}
+standoff1Region = region(segments = [standoff1Sketch.profile])
+standoff1Body = extrude(standoff1Region, length = -30)
+  |> appearance(color = "#9aa2ad")
+hiddenstandoff1 = hide(standoff1Sketch)
+
+standoff2Plane = offsetPlane(XY, offset = 58.5)
+standoff2Sketch = sketch(on = standoff2Plane) {
+  profile = circle(start = [-18.62mm, -23.57mm], center = [-23.57mm, -23.57mm])
+  diameter(profile) == 9.9mm
+}
+standoff2Region = region(segments = [standoff2Sketch.profile])
+standoff2Body = extrude(standoff2Region, length = -30)
+  |> appearance(color = "#9aa2ad")
+hiddenstandoff2 = hide(standoff2Sketch)
+
+standoff3Plane = offsetPlane(XY, offset = 58.5)
+standoff3Sketch = sketch(on = standoff3Plane) {
+  profile = circle(start = [-18.62mm, 23.57mm], center = [-23.57mm, 23.57mm])
+  diameter(profile) == 9.9mm
+}
+standoff3Region = region(segments = [standoff3Sketch.profile])
+standoff3Body = extrude(standoff3Region, length = -30)
+  |> appearance(color = "#9aa2ad")
+hiddenstandoff3 = hide(standoff3Sketch)
+
+couplingPlane = offsetPlane(XY, offset = 31)
+couplingSketch = sketch(on = couplingPlane) {
+  profile = circle(start = [9mm, 0mm], center = [0mm, 0mm])
+  diameter(profile) == 18mm
+}
+couplingRegion = region(segments = [couplingSketch.profile])
+couplingBody = extrude(couplingRegion, length = 25)
+  |> appearance(color = "#6b7280")
+hiddencoupling = hide(couplingSketch)
+
+stubShaftPlane = offsetPlane(XY, offset = 46)
+stubShaftSketch = sketch(on = stubShaftPlane) {
+  profile = circle(start = [4mm, 0mm], center = [0mm, 0mm])
+  diameter(profile) == 8mm
+}
+stubShaftRegion = region(segments = [stubShaftSketch.profile])
+stubShaftBody = extrude(stubShaftRegion, length = -69.5)
+  |> appearance(color = "#c8ccd2")
+hiddenstubShaft = hide(stubShaftSketch)

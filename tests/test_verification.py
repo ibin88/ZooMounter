@@ -28,7 +28,12 @@ from zoomounter.step_inspect import match_holes, parse_step
 from zoomounter.verify import check_bounding_box, check_hole_positions, expected_holes
 
 FIXTURES = Path(__file__).parent
-GOOD_STEP = FIXTURES.parent / "examples" / "nema17_aluminum_example.step"
+# A real generated NEMA 17 plate, kept as a FIXTURE rather than an example.
+# It was produced under the old load model, which does not matter here --
+# the STEP parser and hole matcher care about circles in a file, not about
+# what sized the plate. It moved out of examples/ because a user-facing
+# folder should only hold artifacts the current tool would produce.
+GOOD_STEP = FIXTURES / "fixture_nema17_good.step"
 DRIFTED_STEP = FIXTURES / "fixture_nema17_drifted_hole.step"
 
 # The fixtures are a real generated NEMA 17 plate: aluminium, 150N radial

@@ -14,10 +14,13 @@ project.toml
 thumbnail.png
 main.kcl
 
-# ...except under probes/, where the generated KCL *is* the evidence. Section 8
-# of NOTES-FOR-ZOO.md is a claim about what the Agent API emits, so the files
-# backing that claim have to be in the repo.
+# ...except under probes/ and examples/, where the generated KCL *is* the
+# evidence. Section 8 of NOTES-FOR-ZOO.md is a claim about what the Agent API
+# emits, and examples/ is the proof the pipeline runs end to end, so the files
+# backing those claims have to be in the repo.
 !probes/**/main.kcl
+!examples/**/main.kcl
+!examples/**/project.toml
 
 # Raw run log is just the polling transcript; probe_results.json has the data.
 probes/probe_run.log
