@@ -88,9 +88,34 @@ def _disc(var: str, plane_z: float, dia: float, length: float, colour: str) -> s
         f"  diameter(profile) == {dia:g}mm\n"
         f"}}\n"
         f"{var}Region = region(segments = [{var}Sketch.profile])\n"
-        f"extrude({var}Region, length = {length:g})\n"
+        f"{var}Body = extrude({var}Region, length = {length:g})\n"
         f'  |> appearance(color = "{colour}")\n'
         f"hidden{var} = hide({var}Sketch)\n"
+    )
+
+
+def _ring(var: str, plane_z: float, od: float, bore: float, length: float, colour: str) -> str:
+    """A tube or ring created by subtracting an inner cylinder from an outer one."""
+    ro = od / 2
+    ri = bore / 2
+    return (
+        f"{var}Plane = offsetPlane(XY, offset = {plane_z:g})\n"
+        f"{var}OuterSketch = sketch(on = {var}Plane) {{\n"
+        f"  profile = circle(start = [{ro:g}mm, 0mm], center = [0mm, 0mm])\n"
+        f"  diameter(profile) == {od:g}mm\n"
+        f"}}\n"
+        f"{var}InnerSketch = sketch(on = {var}Plane) {{\n"
+        f"  profile = circle(start = [{ri:g}mm, 0mm], center = [0mm, 0mm])\n"
+        f"  diameter(profile) == {bore:g}mm\n"
+        f"}}\n"
+        f"{var}OuterRegion = region(segments = [{var}OuterSketch.profile])\n"
+        f"{var}InnerRegion = region(segments = [{var}InnerSketch.profile])\n"
+        f"{var}OuterExtrude = extrude({var}OuterRegion, length = {length:g})\n"
+        f"{var}InnerExtrude = extrude({var}InnerRegion, length = {length:g})\n"
+        f"{var}Body = subtract({var}OuterExtrude, tools = [{var}InnerExtrude])\n"
+        f'  |> appearance(color = "{colour}")\n'
+        f"hidden{var}Outer = hide({var}OuterSketch)\n"
+        f"hidden{var}Inner = hide({var}InnerSketch)\n"
     )
 
 
@@ -163,6 +188,20 @@ def component_kcl(mount, thickness_mm: float, face: str, explode_mm: float = 0.0
             )
         return "\n".join(parts)
 
+    if mount.kind == "bearing":
+        parts = [
+            f"// Reference geometry for the shaft supported by this {mount.name}.",
+            "// Drawn for context only -- this is not the designed part.",
+            HEADER,
+        ]
+        # Shaft passes through the block completely
+        shaft_start = s * half_t + s * 20.0
+        parts.append(
+            _disc("shaft", shaft_start, mount.shaft_dia_mm,
+                  -s * (thickness_mm + 40.0), COLOUR_SHAFT)
+        )
+        return "\n".join(parts)
+
     if mount.kind == "board":
         return "\n".join([
             f"// Reference geometry for a {mount.name}.",
@@ -198,7 +237,7 @@ def bearing_kcl(bearing, mount, thickness_mm: float, explode_mm: float = 0.0) ->
         f"({bearing.bore_mm:g}x{bearing.od_mm:g}x{bearing.width_mm:g}mm).",
         "// Catalogue part shown seated in the mount; not a designed component.",
         HEADER,
-        _disc("bearingOuter", base_z, bearing.od_mm, bearing.width_mm, COLOUR_BEARING),
+        _ring("bearingOuter", base_z, bearing.od_mm, bearing.bore_mm, bearing.width_mm, COLOUR_BEARING),
     ])
 
 

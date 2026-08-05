@@ -186,13 +186,66 @@ def select_bearing(
     load_n: float,
     shaft_dia_mm: float,
     safety_factor: float = 2.0,
+    designation: str | None = None,
 ) -> BearingSelection:
     """Pick the smallest bearing of the right type that fits the shaft and
-    carries the load, or explain why none does."""
+    carries the load, or explain why none does. Pass `designation` to check
+    a specific bearing against the load case instead of searching."""
     from .mechanics import Check  # local import: mechanics imports mount_specs
 
     kind = kind_for_load(load_type)
     required = load_n * safety_factor
+
+    if designation:
+        bearing = BY_DESIGNATION.get(designation)
+        if bearing is None:
+            raise ValueError(
+                f"Unknown bearing '{designation}'. Choose from "
+                f"{sorted(BY_DESIGNATION)}."
+            )
+        sel = BearingSelection(
+            bearing=bearing, load_type=load_type, load_n=load_n,
+            shaft_dia_mm=shaft_dia_mm or bearing.bore_mm,
+            safety_factor=safety_factor,
+        )
+        if bearing.kind != kind:
+            sel.notes.append(Check(
+                level="LOUD WARN",
+                message=(
+                    f"{bearing.designation} is a {bearing.kind} bearing but the load "
+                    f"is {load_type}, which calls for a {kind} bearing."
+                ),
+                remedy=(
+                    "Deep groove bearings take limited thrust and thrust "
+                    "bearings take no radial load at all. Pick the type that "
+                    "matches the load, or let selection choose."
+                ),
+                code=BEARING_SELECTION,
+            ))
+        if bearing.static_c0_n < required:
+            sel.notes.append(Check(
+                level="LOUD WARN",
+                message=(
+                    f"{bearing.label} is rated {bearing.static_c0_n:.0f}N static but "
+                    f"{required:.0f}N is required ({load_n:.0f}N at SF "
+                    f"{safety_factor:g})."
+                ),
+                source=bearing.source,
+                remedy="Choose a larger bearing or reduce the load.",
+                code=BEARING_SELECTION,
+            ))
+        else:
+            sel.notes.append(Check(
+                level="PASS",
+                message=(
+                    f"{bearing.label} carries {bearing.static_c0_n:.0f}N static, "
+                    f"against {required:.0f}N required."
+                ),
+                source=bearing.source,
+                code=BEARING_SELECTION,
+            ))
+        return sel
+
     sel = BearingSelection(
         bearing=None, load_type=load_type, load_n=load_n,
         shaft_dia_mm=shaft_dia_mm, safety_factor=safety_factor,
@@ -493,59 +546,7 @@ def auto_bearing_mount(
     surface those rather than falling back to some default block, because a
     block built around the wrong bearing is worse than no block.
     """
-    if designation:
-        bearing = BY_DESIGNATION.get(designation)
-        if bearing is None:
-            raise ValueError(
-                f"Unknown bearing '{designation}'. Choose from "
-                f"{sorted(BY_DESIGNATION)}."
-            )
-        sel = BearingSelection(
-            bearing=bearing, load_type=load_type, load_n=load_n,
-            shaft_dia_mm=shaft_dia_mm or bearing.bore_mm,
-            safety_factor=safety_factor,
-        )
-        from .mechanics import Check
-        wanted = kind_for_load(load_type)
-        if bearing.kind != wanted:
-            sel.notes.append(Check(
-                level="LOUD WARN",
-                message=(
-                    f"{bearing.designation} is a {bearing.kind} bearing but the load "
-                    f"is {load_type}, which calls for a {wanted} bearing."
-                ),
-                remedy=(
-                    "Deep groove bearings take limited thrust and thrust "
-                    "bearings take no radial load at all. Pick the type that "
-                    "matches the load, or let selection choose."
-                ),
-                code=BEARING_SELECTION,
-            ))
-        required = load_n * safety_factor
-        if bearing.static_c0_n < required:
-            sel.notes.append(Check(
-                level="LOUD WARN",
-                message=(
-                    f"{bearing.label} is rated {bearing.static_c0_n:.0f}N static but "
-                    f"{required:.0f}N is required ({load_n:.0f}N at SF "
-                    f"{safety_factor:g})."
-                ),
-                source=bearing.source,
-                remedy="Choose a larger bearing or reduce the load.",
-                code=BEARING_SELECTION,
-            ))
-        else:
-            sel.notes.append(Check(
-                level="PASS",
-                message=(
-                    f"{bearing.label} carries {bearing.static_c0_n:.0f}N static, "
-                    f"against {required:.0f}N required."
-                ),
-                source=bearing.source,
-                code=BEARING_SELECTION,
-            ))
-    else:
-        sel = select_bearing(load_type, load_n, shaft_dia_mm, safety_factor)
+    sel = select_bearing(load_type, load_n, shaft_dia_mm, safety_factor, designation)
 
     if sel.bearing is None:
         return None, sel

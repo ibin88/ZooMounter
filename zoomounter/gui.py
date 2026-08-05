@@ -80,18 +80,30 @@ class App(ctk.CTk):
         self.bearing_frame.grid_columnconfigure(1, weight=1)
         self.shaft_dia_var = self._labeled_entry(
             self.bearing_frame, 0, "Shaft diameter (mm)", "8")
+        self.shaft_dia_var.trace_add("write", lambda *_: self._draw_schematic())
         ctk.CTkLabel(self.bearing_frame, text="Bearing").grid(row=1, column=0, sticky="w")
         self.bearing_var = ctk.StringVar(value="auto")
+        self.bearing_var.trace_add("write", lambda *_: self._draw_schematic())
         ctk.CTkOptionMenu(
             self.bearing_frame,
             values=["auto", *sorted(BY_DESIGNATION)],
             variable=self.bearing_var,
+            command=lambda _: self._draw_schematic(),
         ).grid(row=1, column=1, sticky="ew", pady=4)
         ctk.CTkLabel(
             self.bearing_frame,
             text="auto picks the smallest bearing that fits the shaft and carries the load. Radial loads get a deep groove bearing, axial loads a thrust bearing.",
             font=ctk.CTkFont(size=11), text_color="gray60", anchor="w", wraplength=380,
         ).grid(row=2, column=0, columnspan=2, sticky="w")
+        row += 1
+
+        self.integrate_bearing_var = ctk.BooleanVar(value=False)
+        self.integrate_bearing_cb = ctk.CTkCheckBox(
+            form, text="Integrate bearing if needed (adds seat counterbore)", 
+            variable=self.integrate_bearing_var,
+            command=lambda: self._on_bearing_visibility(self.mount_var.get())
+        )
+        self.integrate_bearing_cb.grid(row=row, column=0, columnspan=2, sticky="w", pady=4)
         row += 1
 
         self.custom_mount_frame = ctk.CTkFrame(form, fg_color="transparent")
@@ -235,7 +247,14 @@ class App(ctk.CTk):
             self.custom_mount_frame.grid()
         else:
             self.custom_mount_frame.grid_remove()
+        
+        if value == "bearing":
+            self.integrate_bearing_cb.grid_remove()
+        else:
+            self.integrate_bearing_cb.grid()
+            
         self._on_bearing_visibility(value)
+        self._draw_schematic()
 
     def _on_host_mount_change(self, value: str) -> None:
         if value == "none":
@@ -400,33 +419,82 @@ class App(ctk.CTk):
             })
             shapes.append({
                 "pts": [(-bw, -bh, top), (bw, -bh, top), (bw, bh, top), (-bw, bh, top)],
-                "fill": "#454545", "outline": "#888888", "width": 1,
+                "fill": "#444444", "outline": "#777777", "width": 1,
             })
-            labels.append((
-                (0, 0, top), f"Motor {base.plate_width_mm:.0f}mm",
-                "white", ("Arial", 9), (0, 0), "center",
-            ))
-        else:
-            for x, y in mount.hole_positions:
+        # mount and thickness were already resolved (with host-mount features
+        # and any bearing integration applied) at the top of this method --
+        # reuse them instead of re-resolving with a stale call signature.
+        t = T
+
+        if mount is not None:
+            # Main plate
+            shapes.append({
+                "pts": [
+                    (-mount.plate_width_mm / 2, -mount.plate_height_mm / 2, t),
+                    (mount.plate_width_mm / 2, -mount.plate_height_mm / 2, t),
+                    (mount.plate_width_mm / 2, mount.plate_height_mm / 2, t),
+                    (-mount.plate_width_mm / 2, mount.plate_height_mm / 2, t),
+                ],
+                "fill": "#3b3b3b", "outline": "#4a4a4a", "width": 1,
+            })
+
+            # Bearing seat (if any)
+            if hasattr(mount, "bearing_seat_dia_mm") and mount.bearing_seat_dia_mm > 0:
+                seat_dia = mount.bearing_seat_dia_mm
+                seat_depth = getattr(mount, "bearing_seat_depth_mm", 0.0)
+                # Outer circle of the counterbore/through-hole
                 shapes.append({
-                    "pts": self._circle_3d(x, y, mount.bolt_hole_dia_mm / 2, T),
-                    "fill": "#121614", "outline": "#2fa572", "width": 1,
+                    "pts": self._circle_3d(0, 0, seat_dia / 2, t),
+                    "fill": "#1f2421", "outline": "#2fa572", "width": 1,
                 })
+                # Inner floor of the counterbore, if it's not a through hole
+                if seat_depth > 0 and seat_depth < t:
+                    shapes.append({
+                        "pts": self._circle_3d(0, 0, seat_dia / 2, t - seat_depth),
+                        "fill": "", "outline": "#2fa572", "width": 1,
+                    })
+
+            # Pilot boss / center hole
             if mount.center_hole_dia_mm > 0:
+                # If there's a bearing seat, the center hole is inside it
+                base_z = t - getattr(mount, "bearing_seat_depth_mm", 0.0)
+                if base_z < 0: base_z = 0
                 shapes.append({
-                    "pts": self._circle_3d(0, 0, mount.center_hole_dia_mm / 2, T),
+                    "pts": self._circle_3d(0, 0, mount.center_hole_dia_mm / 2, base_z),
                     "fill": "#121614", "outline": "#2fa572", "width": 1,
                 })
 
-        # Host-side features -- the point of this panel.
+            if hm == "2020-slots" or hm == "4040-slots":
+                pitch = 20.0 if hm == "2020-slots" else 40.0
+                dir = self.host_slot_dir_var.get()
+                cx, cy = (pitch / 2, 0) if dir == "parallel" else (0, pitch / 2)
+                for sx, sy in [(-cx, -cy), (cx, cy)]:
+                    shapes.append({
+                        "pts": self._slot_3d(sx, sy, 10, 5, "x" if dir == "parallel" else "y", t),
+                        "fill": "#121614", "outline": "#2fa572", "width": 1,
+                    })
+            elif hm == "corner-holes":
+                for x, y in mount.hole_positions:
+                    shapes.append({
+                        "pts": self._circle_3d(x, y, 2.5, t),
+                        "fill": "#121614", "outline": "#2fa572", "width": 1,
+                    })
+            else:
+                for x, y in mount.hole_positions:
+                    shapes.append({
+                        "pts": self._circle_3d(x, y, mount.bolt_hole_dia_mm / 2, t),
+                        "fill": "#121614", "outline": "#2fa572", "width": 1,
+                    })
+
+        # Host-side features
         for x, y, length, width, direction in mount.host_slots:
             shapes.append({
-                "pts": self._slot_3d(x, y, length, width, direction, T),
+                "pts": self._slot_3d(x, y, length, width, direction, t),
                 "fill": "#0f1a1c", "outline": "#4fd6e0", "width": 2,
             })
         for x, y, dia in mount.host_holes:
             shapes.append({
-                "pts": self._circle_3d(x, y, dia / 2, T),
+                "pts": self._circle_3d(x, y, dia / 2, t),
                 "fill": "#0f1a1c", "outline": "#4fd6e0", "width": 2,
             })
         if mount.host_slots:
@@ -610,6 +678,40 @@ class App(ctk.CTk):
         load_n = float(self.load_var.get())
         safety_factor = float(self.safety_var.get())
         overhang = float(self.overhang_var.get()) if self.overhang_var.get() else None
+        
+        if self.integrate_bearing_var.get():
+            designation = self.bearing_var.get()
+            from .bearings import select_bearing, SHAFT_CLEARANCE_MM
+            selection = select_bearing(
+                self.load_type_var.get(), load_n, float(self.shaft_dia_var.get()),
+                safety_factor, None if designation == "auto" else designation
+            )
+            if selection.bearing:
+                import dataclasses
+                # Integrate the bearing seat into this mount
+                load_type = self.load_type_var.get()
+                if load_type == "axial":
+                    seat_depth = selection.bearing.width_mm
+                    centre_hole = selection.bearing.bore_mm + SHAFT_CLEARANCE_MM
+                else:
+                    seat_depth = 0.0
+                    centre_hole = 0.0
+
+                mount = dataclasses.replace(
+                    mount,
+                    bearing_designation=selection.bearing.designation,
+                    bearing_seat_dia_mm=selection.bearing.od_mm,
+                    bearing_seat_depth_mm=seat_depth,
+                    bearing_width_mm=selection.bearing.width_mm,
+                    center_hole_dia_mm=max(mount.center_hole_dia_mm, centre_hole)
+                )
+                self._selected_bearing = selection.bearing
+            else:
+                self._selected_bearing = None
+                raise ValueError("No bearing fits this case.")
+        else:
+            self._selected_bearing = None
+
         thickness = mechanics.required_thickness(
             load_n=load_n,
             mount=mount,
@@ -618,6 +720,16 @@ class App(ctk.CTk):
             lever_arm_mm=overhang,
             load_type=self.load_type_var.get(),
         )
+        
+        # Add selection notes if we integrated a bearing
+        if self.integrate_bearing_var.get() and getattr(self, "_selected_bearing", None):
+            from . import bearings as _b
+            thickness.notes.extend(selection.notes)
+            thickness.notes.append(
+                _b.check_seat_depth(self._selected_bearing, thickness.required_thickness_mm,
+                                    self.load_type_var.get())
+            )
+
         return mount, material, load_n, safety_factor, thickness
 
     def _resolve_bearing_spec(self):
