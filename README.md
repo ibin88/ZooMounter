@@ -1,4 +1,14 @@
+
+
+https://github.com/user-attachments/assets/405e8449-3164-4445-88a8-19eff0985d94
+
 # ZooMounter
+
+
+
+https://github.com/user-attachments/assets/687351ed-9f30-4ac0-83ad-7552d90ce1d5
+
+
 
 **An AI-generated number and a verified one look identical once they're
 written down.** That's not a prompting problem, and you can't test your way
