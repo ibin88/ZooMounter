@@ -415,27 +415,67 @@ def write_kcl_project(kcl_code: str, output_dir: Path) -> Path:
     return kcl_path
 
 
+# Both CLI paths below execute KCL on Zoo's engine over a websocket, and that
+# connection drops. When it does, the CLI reports an `EngineHangup` -- but it
+# formats it as a KCL diagnostic, with a source span underlining a line of the
+# user's file. It reads exactly like a syntax error in the part. It is not:
+# the identical file, unedited, renders on the next attempt seconds later.
+#
+# So retry, rather than hand someone a transport failure dressed as their own
+# mistake. Only these markers retry; a real KCL error still fails on the first
+# attempt, because retrying genuinely broken geometry three times just makes
+# the user wait longer for the same answer.
+_TRANSIENT_MARKERS = ("enginehangup", "engine hangup", "connection interrupted")
+
+
+def _is_transient(output: str) -> bool:
+    lowered = output.lower()
+    return any(marker in lowered for marker in _TRANSIENT_MARKERS)
+
+
+def _run_zoo_cli(args: list[str], what: str, attempts: int = 3) -> subprocess.CompletedProcess:
+    """Run a `zoo` subcommand, retrying only transient engine hangups.
+
+    Returns the first successful run. Raises GenerationError carrying the last
+    output if every attempt fails -- including how many were tried, so a
+    persistent hangup is distinguishable from a one-off."""
+    last_output = ""
+    for attempt in range(1, attempts + 1):
+        try:
+            result = subprocess.run(
+                [_zoo_cli(), *args], capture_output=True, text=True, timeout=120,
+            )
+        except FileNotFoundError as e:
+            raise GenerationError(
+                f"Zoo CLI not found at '{_zoo_cli()}'. Install it and ensure it's on PATH, "
+                f"or set ZOO_CLI_PATH to its location."
+            ) from e
+
+        if result.returncode == 0:
+            return result
+
+        last_output = result.stderr or result.stdout
+        if not _is_transient(last_output) or attempt == attempts:
+            break
+        # Linear backoff. The engine recovers fast -- the observed case
+        # succeeded on the very next call -- so this is about not hammering a
+        # service that is already struggling, not about waiting one out.
+        time.sleep(2.0 * attempt)
+
+    tried = f" after {attempts} attempts" if _is_transient(last_output) else ""
+    raise GenerationError(f"{what} failed{tried}:\n{last_output}")
+
+
 def snapshot_preview(kcl_path: Path, image_path: Path, angle: str = "iso") -> Path:
     """Render a quick preview image of a KCL file via `zoo kcl snapshot`.
     Writes to whatever `image_path` you give it -- pass a temp-directory
     path if you don't want a preview image left behind in the project
     folder. Returns image_path on success."""
     image_path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        result = subprocess.run(
-            [_zoo_cli(), "kcl", "snapshot", "--angle", angle, str(kcl_path), str(image_path)],
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
-    except FileNotFoundError as e:
-        raise GenerationError(
-            f"Zoo CLI not found at '{_zoo_cli()}'. Install it and ensure it's on PATH, "
-            f"or set ZOO_CLI_PATH to its location."
-        ) from e
-
-    if result.returncode != 0:
-        raise GenerationError(f"zoo kcl snapshot failed:\n{result.stderr or result.stdout}")
+    _run_zoo_cli(
+        ["kcl", "snapshot", "--angle", angle, str(kcl_path), str(image_path)],
+        "zoo kcl snapshot",
+    )
     if not image_path.exists():
         raise GenerationError(f"Expected preview image not found at {image_path}")
     return image_path
@@ -448,21 +488,10 @@ def export_step(kcl_path: Path, output_dir: Path) -> Path:
     export_dir = output_dir / "export"
     export_dir.mkdir(parents=True, exist_ok=True)
 
-    try:
-        result = subprocess.run(
-            [_zoo_cli(), "kcl", "export", "--output-format", "step", str(kcl_path), str(export_dir)],
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
-    except FileNotFoundError as e:
-        raise GenerationError(
-            f"Zoo CLI not found at '{_zoo_cli()}'. Install it and ensure it's on PATH, "
-            f"or set ZOO_CLI_PATH to its location."
-        ) from e
-
-    if result.returncode != 0:
-        raise GenerationError(f"zoo kcl export failed:\n{result.stderr or result.stdout}")
+    _run_zoo_cli(
+        ["kcl", "export", "--output-format", "step", str(kcl_path), str(export_dir)],
+        "zoo kcl export",
+    )
 
     step_path = export_dir / "output.step"
     if not step_path.exists():

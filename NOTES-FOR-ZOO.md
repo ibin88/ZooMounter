@@ -664,5 +664,76 @@ sits under it, and it is MIT licensed. Take any of it.
 
 ---
 
+## 15. `EngineHangup` is reported as a KCL error in the user's file
+
+Found on the last day, so it is last — but it is the most straightforwardly
+actionable thing in this document.
+
+A `zoo kcl snapshot` failed like this:
+
+```
+KCL EngineHangup error
+
+  × engine hangup: modeling connection interrupted; please reconnect and retry
+  │ (API call ID: 5b71a635-6f2c-4142-89ee-7d244f938364)
+   ╭─[8:1]
+ 7 │
+ 8 │ import "mount.kcl" as mount
+   · ─────────────┬─────────────
+   ·              ╰── ...\assembly-exploded\main.kcl
+ 9 │ import "component.kcl" as component
+   ╰────
+```
+
+**The file was fine.** The identical bytes, unedited, rendered on the very next
+attempt seconds later. I retried three times while diagnosing; it succeeded on
+the first retry, every time.
+
+The problem is the presentation, not the failure. Connections drop — that is
+normal and the message even says "please reconnect and retry". But it is
+rendered in the same diagnostic format KCL uses for source errors, complete
+with a span underlining line 8 of *my* file and an arrow pointing at it. Every
+visual cue says "the error is here, in this import." Nothing is wrong at line
+8. Nothing is wrong anywhere in the file.
+
+Line 8 is not even meaningfully the location — it is just wherever the engine
+happened to be when the socket died. A different drop would underline a
+different line, and neither is a place anyone should go looking.
+
+I lost time editing generated KCL that was already correct before I thought to
+simply run it again.
+
+### What I'd suggest
+
+1. **Don't format transport failures as source diagnostics.** No span, no
+   caret, no line number. `EngineHangup` is not a property of the file. A plain
+   `error: connection to the modeling engine was interrupted (call ID ...);
+   retry` carries everything useful and misleads nobody.
+2. **Retry inside the CLI.** It is transient by nature and the CLI already
+   knows it is transient — it says so. One or two automatic retries with a
+   short backoff would make this invisible for the overwhelmingly common case.
+   Every caller is otherwise obliged to implement the same retry, keyed off
+   matching your error text, which is a fragile contract to hand out.
+3. **Keep the call ID.** That part is genuinely good — it made this reportable.
+
+### What I did about it
+
+`_run_zoo_cli` in [`zoomounter/generate.py`](zoomounter/generate.py) retries
+these, and only these — a real KCL error still fails on the first attempt,
+because retrying broken geometry three times only makes the user wait longer
+for the same answer. Covered by
+[`tests/test_transient_retry.py`](tests/test_transient_retry.py).
+
+This also surfaced a bug on my side worth naming, since it is the reason the
+above took any time at all: the GUI reported *every* background failure as
+`NoneType: None`. The error path formatted its message inside a lambda handed
+to Tk's `after()`, and Python clears the `except ... as e` binding when the
+block exits — so the message was built from a name that no longer held the
+exception. A perfectly good error message existed and never reached the screen.
+Fixed in `2847c32`. If you take one thing from this section: an error that
+cannot be seen and an error that does not exist cost the same.
+
+---
+
 *Findings from building [ZooMounter](https://github.com/ibin88/ZooMounter) for
 the Zoo API Makeathon, July-August 2026. Happy to expand on any of these.*
