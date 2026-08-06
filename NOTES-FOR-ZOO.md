@@ -155,6 +155,21 @@ more useful than the prose docs and I found it late.
   `CIRCLE` → `AXIS2_PLACEMENT_3D` → `CARTESIAN_POINT` chain is exactly what
   you'd hope for.
 
+- **…but multi-body STEP export drops every body name.** Exporting an assembly
+  of ten solids gives ten `PRODUCT` entries, correctly separated and
+  individually selectable — and all ten are called `UNIDENTIFIED_PRODUCT`. The
+  KCL knew them as `mount`, `motorBody`, `coupling`, `stubShaft`,
+  `bearingOuter` and so on; none of that survives the export.
+
+  The geometry is right and the structure is right, so this is close to free to
+  fix: carry the KCL variable (or the module name) into the `PRODUCT` name. As
+  it stands, opening the file in CATIA gives a specification tree of ten
+  identical rows, and the only way to tell the bearing from the coupling is to
+  click each one and watch what highlights. For anyone whose next step is
+  "switch off the reference geometry and keep the part I designed" — which is
+  most people importing an assembly — that is the difference between one click
+  and ten guesses.
+
 - **KCL output from text-to-cad is readable and parametric**, with named
   variables (`plateWidth = 42.3mm`) rather than hard-coded literals. That made
   it much easier to trust than opaque generated geometry, and it's a real

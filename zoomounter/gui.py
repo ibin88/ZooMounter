@@ -891,7 +891,17 @@ class App(ctk.CTk):
         )
 
     def _save_step_as(self) -> None:
-        src = deliver_mod.find_step(self.output_dir)
+        # Prefer the assembly: mount, motor, coupling, shaft and bearing, as
+        # separately selectable solids. Someone saving a STEP is taking the
+        # part into their own CAD package, and there they want the context --
+        # what it bolts to and what it drives -- which they can then switch off
+        # body by body. Handing over the bare plate made them rebuild the
+        # surroundings by hand just to check the fit.
+        #
+        # Falls back to the plate, which is all a run has if the assembly step
+        # failed or was skipped.
+        assembly_step = deliver_mod.find_step(self.output_dir / "assembly")
+        src = assembly_step or deliver_mod.find_step(self.output_dir)
         if src is None:
             self.status_label.configure(
                 text="No STEP in this run -- it was a preview-only run.",
@@ -906,8 +916,10 @@ class App(ctk.CTk):
         if not dest:
             return
         Path(dest).write_bytes(src.read_bytes())
+        what = "Assembly" if assembly_step else "Plate"
         self.status_label.configure(
-            text=f"Saved {Path(dest).name}. Opens in Fusion, SolidWorks, Onshape, FreeCAD.",
+            text=f"{what} saved as {Path(dest).name}. Opens in CATIA, Fusion, "
+                 f"SolidWorks, Onshape, FreeCAD.",
             text_color="#2fa572",
         )
 
@@ -1507,6 +1519,29 @@ class App(ctk.CTk):
         step_path = generate.export_step(kcl_path, self.output_dir)
         self.after(0, lambda: self.status_label.configure(text="Verifying against Zoo File Format API..."))
         result = verify.verify(step_path, mount, material, thickness.required_thickness_mm)
+
+        # Export the assembly to STEP as well -- mount, motor, coupling, shaft
+        # and bearing, as separately selectable solids you can switch off one
+        # at a time in whatever CAD package you actually use.
+        #
+        # The plate STEP above stays the verified one: verification compares
+        # hole positions against the spec, and the motor and bearing are
+        # catalogue reference geometry with no spec of their own to check
+        # against. But the plate alone was never what anyone wanted to open.
+        # Exporting only the part we could verify confused "what we checked"
+        # with "what we made", and handed people the smaller of the two.
+        #
+        # After verification, not before: this is a second round trip, and it
+        # must not delay the answer the user is waiting on. Guarded, because a
+        # failed assembly export must never cost a verified part.
+        self.after(0, lambda: self.status_label.configure(text="Exporting assembly STEP..."))
+        try:
+            generate.export_step(
+                self.output_dir / "assembly" / "main.kcl",
+                self.output_dir / "assembly",
+            )
+        except Exception:
+            traceback.print_exc()
 
         report_path = self.output_dir / "inspection_report.md"
         # The on-screen preview lives in a temp file; the report needs one
