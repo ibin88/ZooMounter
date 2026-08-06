@@ -1431,7 +1431,16 @@ class App(ctk.CTk):
             self._run_pipeline_inner(mount, material, load_n, safety_factor, thickness, decision, do_export_step)
         except Exception as e:
             traceback.print_exc()
-            self.after(0, lambda: self._on_generate_error(f"{type(e).__name__}: {e}"))
+            # Format the message HERE, not inside the lambda. Python clears the
+            # `except ... as e` binding when the block exits, and .after()
+            # schedules the lambda onto the main thread -- which is free to run
+            # it after this thread has already cleared `e`. The lambda then
+            # reads None and reports "NoneType: None", destroying the actual
+            # error. That is how a real "GenerationError: KCL EngineHangup --
+            # modeling connection interrupted" reached the user as a message
+            # naming no error at all, on a screen with nothing else to go on.
+            message = f"{type(e).__name__}: {e}"
+            self.after(0, lambda: self._on_generate_error(message))
 
     def _build_assembly(self, mount, thickness, kcl_code):
         """Write the to-scale assembly and an exploded copy for the render.
